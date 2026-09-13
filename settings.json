@@ -1,0 +1,82 @@
+[
+    {
+        "uniqueID": "notes",
+        "type": "textarea",
+        "title": "Notes:",
+        "description": "renders the currently selected beatmap in song select, synced to the preview audio timestamp.\n\nmania only (std -> mania conversion is previewed approximately; taiko/catch show a notice).\n\nscroll speed and visuals follow the map difficulty + selected mods + player skin served by tosu.\nscore, combo, accuracy and judgement are intentionally not drawn.\n\nplace this counter as an OBS browser source or in the tosu ingame overlay, then size/position it freely.",
+        "options": [],
+        "value": "feel free to adjust this text. it does nothing."
+    },
+    {
+        "uniqueID": "backgroundColor",
+        "type": "color",
+        "title": "Background Color",
+        "description": "",
+        "options": [],
+        "value": "#000000"
+    },
+    {
+        "uniqueID": "backgroundOpacity",
+        "type": "number",
+        "title": "Background Opacity (0 - 1)",
+        "description": "0 keeps the background fully transparent",
+        "options": [],
+        "value": 0
+    },
+    {
+        "uniqueID": "renderScale",
+        "type": "number",
+        "title": "Render Scale (%)",
+        "description": "scales the playfield inside the counter window",
+        "options": [],
+        "value": 100
+    },
+    {
+        "uniqueID": "showInSongSelect",
+        "type": "checkbox",
+        "title": "Show In Song Select",
+        "description": "",
+        "options": [],
+        "value": true
+    },
+    {
+        "uniqueID": "autoHideInGameplay",
+        "type": "checkbox",
+        "title": "Auto Hide In Gameplay",
+        "description": "hides the preview while playing; disable to keep it visible during play",
+        "options": [],
+        "value": true
+    },
+    {
+        "uniqueID": "useSkin",
+        "type": "checkbox",
+        "title": "Use Player Skin",
+        "description": "on: use the currently selected player skin (including skin.ini mappings). off: use the client default skin (osu!stable / lazer legacy assets)",
+        "options": [],
+        "value": true
+    },
+    {
+        "uniqueID": "maniaScrollSpeedOverride",
+        "type": "number",
+        "title": "Mania Scroll Speed Override (0 = game)",
+        "description": "1 - 40, 0 uses the scroll speed reported by tosu",
+        "options": [],
+        "value": 0
+    },
+    {
+        "uniqueID": "playfieldOpacity",
+        "type": "number",
+        "title": "Playfield Opacity (0 - 1)",
+        "description": "opacity of notes and playfield elements",
+        "options": [],
+        "value": 1
+    },
+    {
+        "uniqueID": "fpsLimit",
+        "type": "number",
+        "title": "FPS Limit (0 = unlimited)",
+        "description": "cap the redraw rate (e.g. 60) if the ingame overlay stutters",
+        "options": [],
+        "value": 0
+    }
+]

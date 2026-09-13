@@ -1,0 +1,6 @@
+Usecase: Ingame Overlay, OBS Overlay
+Name: Beatmap Preview
+Version: 0.7.6
+Author: M1ch1bata
+CompatibleWith: Tosu
+Resolution: 640x480
