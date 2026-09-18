@@ -51,7 +51,7 @@
         "uniqueID": "useSkin",
         "type": "checkbox",
         "title": "Use Player Skin",
-        "description": "on: use the currently selected player skin (including skin.ini mappings). off: use the client default skin (osu!stable / lazer legacy assets)",
+        "description": "on: use the currently selected player skin (including skin.ini mappings); key counts or elements the skin does not define fall back to the client default skin. off: always use the client default skin (osu!stable / lazer legacy assets)",
         "options": [],
         "value": true
     },

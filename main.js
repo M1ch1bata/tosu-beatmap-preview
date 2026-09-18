@@ -57,6 +57,19 @@ const DEFAULT_SKIN_FILES = new Set([
   "mania-stage-hint@2x.png"
 ]);
 
+const STAGE_SIZE = 480;
+const DEFAULT_HIT_POSITION = 402;
+const HIT_POSITION_MIN = 240;
+const SCROLL_TIME_REFERENCE_MS = 11485;
+const NOTE_LOOKBACK_MS = 30000;
+const SPAWN_MARGIN = 1.3;
+const NOTE_VIEW_MARGIN = 80;
+const NOTE_BODY_MAX_TILES = 64;
+const DEFAULT_NOTE_ASPECT = 164 / 512;
+const OPTIONAL_SOCKET_RETRY_LIMIT = 5;
+const RETRY_BASE_MS = 2000;
+const RETRY_MAX_MS = 30000;
+
 const settings = {
   backgroundColor: "#000000",
   backgroundOpacity: 0,
@@ -77,6 +90,8 @@ const state = {
   checksum: "",
   skinFolder: "",
   loadedSkinFolder: null,
+  skinRev: 0,
+  skinFilePresent: false,
   csConverted: 4,
   maniaScrollSpeed: 0,
   beatmap: null,
@@ -87,6 +102,7 @@ const state = {
   pendingKey: "",
   retryKey: "",
   retryAt: 0,
+  retryCount: 0,
   loadError: "",
   loadToken: 0,
   time: 0,
@@ -137,26 +153,43 @@ class SocketManager {
   constructor(host) {
     this.host = host;
     this.sockets = {};
+    this.failures = {};
+    this.gaveUp = {};
   }
-  open(path, onMessage, filters) {
+  canRetry(path, options) {
+    if (!options || !options.optional) return true;
+    if ((this.failures[path] || 0) <= OPTIONAL_SOCKET_RETRY_LIMIT) return true;
+    if (!this.gaveUp[path]) {
+      this.gaveUp[path] = true;
+      console.warn(`[BeatmapPreview] optional endpoint ${path} unavailable, giving up`);
+    }
+    return false;
+  }
+  open(path, onMessage, filters, options) {
     if (this.sockets[path]) return;
     const url = `ws://${this.host}${path}?l=${encodeURIComponent(window.COUNTER_PATH || "")}`;
     let ws;
     try {
       ws = new WebSocket(url);
     } catch (err) {
-      setTimeout(() => this.open(path, onMessage, filters), 1000);
+      this.failures[path] = (this.failures[path] || 0) + 1;
+      if (this.canRetry(path, options)) setTimeout(() => this.open(path, onMessage, filters, options), 1000);
       return;
     }
     this.sockets[path] = ws;
     ws.onopen = () => {
+      this.failures[path] = 0;
       if (filters) ws.send(`applyFilters:${JSON.stringify(filters)}`);
+      if (options && typeof options.onOpen === "function") options.onOpen();
     };
     ws.onclose = () => {
       delete this.sockets[path];
-      setTimeout(() => this.open(path, onMessage, filters), 1000);
+      this.failures[path] = (this.failures[path] || 0) + 1;
+      if (this.canRetry(path, options)) setTimeout(() => this.open(path, onMessage, filters, options), 1000);
     };
-    ws.onerror = () => {};
+    ws.onerror = () => {
+      console.warn("[BeatmapPreview] websocket error:", path);
+    };
     ws.onmessage = (event) => {
       try {
         const data = JSON.parse(event.data);
@@ -426,14 +459,17 @@ function parseSkinIni(text) {
 }
 
 function skinContentRev() {
-  return `${state.loadedSkinFolder || ""}|${settings.useSkin ? "1" : "0"}|${settings.useSkin ? "" : state.client}`;
+  return `${state.loadedSkinFolder || ""}|${state.skinRev}|${settings.useSkin ? "1" : "0"}|${state.client}`;
 }
 
 function skinBodyStyleDefault() {
-  if (!settings.useSkin) return 0;
-  const version = Number.parseFloat(state.skin && state.skin.general ? state.skin.general.version : "");
-  if (Number.isFinite(version) && version < 2.5) return 0;
-  return 1;
+  if (!settings.useSkin) return 1;
+  const versionRaw = state.skin && state.skin.general ? state.skin.general.version : undefined;
+  if (versionRaw === undefined) return state.skinFilePresent ? 0 : 1;
+  if (String(versionRaw).trim().toLowerCase() === "latest") return 1;
+  const version = Number.parseFloat(versionRaw);
+  if (!Number.isFinite(version)) return 1;
+  return version < 2.5 ? 0 : 1;
 }
 
 function maniaSkin(keys) {
@@ -452,11 +488,11 @@ function maniaSkin(keys) {
   };
   const widths = parseArray("columnwidth", keys, 30);
   const spacings = parseArray("columnspacing", Math.max(0, keys - 1), 0);
-  const hitPosition = clamp(num(cfg && cfg.hitposition, 402), 240, 480);
+  const hitPosition = clamp(num(cfg && cfg.hitposition, DEFAULT_HIT_POSITION), HIT_POSITION_MIN, STAGE_SIZE);
   const noteHeightScale = num(cfg && cfg.widthfornoteheightscale, 0);
   const total = widths.reduce((a, b) => a + b, 0) + spacings.reduce((a, b) => a + b, 0);
   const explicitStart = cfg && cfg.columnstart !== undefined ? parseFloat(cfg.columnstart) : NaN;
-  let x = Number.isFinite(explicitStart) ? explicitStart : (480 - total) / 2;
+  let x = Number.isFinite(explicitStart) ? explicitStart : (STAGE_SIZE - total) / 2;
   const cols = [];
   for (let i = 0; i < keys; i++) {
     cols.push({ x, w: widths[i] });
@@ -486,8 +522,7 @@ function getManiaLayout(keys) {
   return layout;
 }
 
-function assetDirPrefix() {
-  if (settings.useSkin) return "/files/skin/";
+function defaultSkinPrefix() {
   const folder = state.client === "lazer" ? "lazer" : "stable";
   return `./default-skin/${folder}/`;
 }
@@ -500,12 +535,14 @@ function splitSkinPath(name) {
     : { dir: "", base: path };
 }
 
-function encodeSkinPath(path) {
-  return String(path).split("/").map((part) => encodeURIComponent(part)).join("/");
+function isSafeAssetName(name) {
+  const path = String(name || "").replace(/\\/g, "/");
+  if (!path || path.startsWith("/") || /^[a-zA-Z]:/.test(path)) return false;
+  return !path.split("/").some((segment) => segment === "" || segment === "." || segment === "..");
 }
 
-function skinAssetUrl(base) {
-  return `${assetDirPrefix()}${encodeSkinPath(String(base).replace(/\\/g, "/"))}.png`;
+function encodeSkinPath(path) {
+  return String(path).split("/").map((part) => encodeURIComponent(part)).join("/");
 }
 
 function tryImageUrl(url) {
@@ -515,10 +552,6 @@ function tryImageUrl(url) {
     img.onerror = () => resolve(null);
     img.src = url;
   });
-}
-
-function tryImage(base) {
-  return tryImageUrl(skinAssetUrl(base));
 }
 
 function parseListingNames(html) {
@@ -553,14 +586,14 @@ function getListing(dir) {
   return listingCache.get(key);
 }
 
-async function resolveImage(name) {
+async function findImage(dirPrefix, files, name) {
   const { dir, base } = splitSkinPath(name);
-  const fullDir = assetDirPrefix() + dir;
-  const listing = settings.useSkin ? await getListing(fullDir) : DEFAULT_SKIN_FILES;
+  const fullDir = dirPrefix + dir;
+  const listing = files || (await getListing(fullDir));
+  const candidates = [`${base}@2x.png`, `${base}.png`, `${base}-0@2x.png`, `${base}-0.png`];
   if (listing) {
     const lower = new Map();
     for (const actual of listing) lower.set(actual.toLowerCase(), actual);
-    const candidates = [`${base}@2x.png`, `${base}.png`, `${base}-0@2x.png`, `${base}-0.png`];
     for (const candidate of candidates) {
       const actual = lower.get(candidate.toLowerCase());
       if (!actual) continue;
@@ -570,21 +603,33 @@ async function resolveImage(name) {
     return null;
   }
   // Listing unavailable (player skin without directory index): probe variants.
-  const hd = await tryImage(`${name}@2x`);
-  if (hd) return hd;
-  const sd = await tryImage(name);
-  if (sd) return sd;
-  const animHd = await tryImage(`${name}-0@2x`);
-  if (animHd) return animHd;
-  return tryImage(`${name}-0`);
+  for (const candidate of candidates) {
+    const img = await tryImageUrl(encodeSkinPath(fullDir + candidate));
+    if (img) return img;
+  }
+  return null;
 }
 
-function requestImage(name) {
-  let entry = imageState.get(name);
+async function resolveImage(name, fallbackName) {
+  if (!isSafeAssetName(name) || (fallbackName && !isSafeAssetName(fallbackName))) {
+    console.warn("[BeatmapPreview] rejected unsafe skin asset name:", name);
+    return null;
+  }
+  if (!settings.useSkin) return findImage(defaultSkinPrefix(), DEFAULT_SKIN_FILES, name);
+  const own = await findImage("/files/skin/", null, name);
+  if (own) return own;
+  // Elements missing from the player skin fall back to the client default skin
+  // (matches osu!stable/lazer behaviour for key counts the skin has no config for).
+  return findImage(defaultSkinPrefix(), DEFAULT_SKIN_FILES, fallbackName || name);
+}
+
+function requestImage(name, fallbackName) {
+  const cacheKey = fallbackName && fallbackName !== name ? `${name}|${fallbackName}` : name;
+  let entry = imageState.get(cacheKey);
   if (!entry) {
     entry = { img: null };
-    imageState.set(name, entry);
-    resolveImage(name)
+    imageState.set(cacheKey, entry);
+    resolveImage(name, fallbackName)
       .then((img) => {
         entry.img = img;
         renderCache.loadedImages += 1;
@@ -596,10 +641,23 @@ function requestImage(name) {
   return entry.img;
 }
 
-function drawImage2(ctx, img, cx, cy, w, h) {
+function drawImage2(ctx, img, cx, cy, w, h, flipY) {
   if (!img) return false;
-  ctx.drawImage(img, cx - w / 2, cy - h / 2, w, h);
+  if (flipY) {
+    ctx.save();
+    ctx.translate(cx, cy);
+    ctx.scale(1, -1);
+    ctx.drawImage(img, -w / 2, -h / 2, w, h);
+    ctx.restore();
+  } else {
+    ctx.drawImage(img, cx - w / 2, cy - h / 2, w, h);
+  }
   return true;
+}
+
+function noteDrawHeight(img, heightScale) {
+  const ratio = img ? img.height / Math.max(1, img.width) : DEFAULT_NOTE_ASPECT;
+  return Math.max(1, heightScale * ratio);
 }
 
 function makeScroll(cps, timeRange) {
@@ -629,6 +687,7 @@ function getScroll(map, timeRange) {
   renderCache.scrollMap = map;
   renderCache.scrollRange = timeRange;
   renderCache.scroll = scroll;
+  renderCache.cursorMap = null;
   return scroll;
 }
 
@@ -651,12 +710,24 @@ function maniaImageNames(keys, column) {
   const cfg = settings.useSkin && state.skin && state.skin.mania ? state.skin.mania[keys] : null;
   const index = defaultManiaColumnIndex(keys, column);
   const custom = (key) => (cfg && cfg[key] ? String(cfg[key]) : "");
+  const fallback = {
+    note: `mania-note${index}`,
+    head: `mania-note${index}H`,
+    tail: `mania-note${index}T`,
+    body: `mania-note${index}L`,
+    key: `mania-key${index}`
+  };
   return {
-    note: custom(`noteimage${column}`) || `mania-note${index}`,
-    head: custom(`noteimage${column}h`) || `mania-note${index}H`,
-    tail: custom(`noteimage${column}t`) || `mania-note${index}T`,
-    body: custom(`noteimage${column}l`) || `mania-note${index}L`,
-    key: custom(`keyimage${column}`) || `mania-key${index}`
+    note: custom(`noteimage${column}`) || fallback.note,
+    head: custom(`noteimage${column}h`) || fallback.head,
+    tail: custom(`noteimage${column}t`) || fallback.tail,
+    body: custom(`noteimage${column}l`) || fallback.body,
+    key: custom(`keyimage${column}`) || fallback.key,
+    fallbackNote: fallback.note,
+    fallbackHead: fallback.head,
+    fallbackTail: fallback.tail,
+    fallbackBody: fallback.body,
+    fallbackKey: fallback.key
   };
 }
 
@@ -687,17 +758,17 @@ function getColumnInfo(map, layout) {
   const info = [];
   for (let i = 0; i < map.keys; i++) {
     const n = names[i];
-    const note = requestImage(n.note);
-    const head = requestImage(n.head);
+    const note = requestImage(n.note, n.fallbackNote);
+    const head = requestImage(n.head, n.fallbackHead);
     info.push({
-      key: requestImage(n.key),
+      key: requestImage(n.key, n.fallbackKey),
       note,
       head,
-      tail: requestImage(n.tail) || head || note,
-      body: requestImage(n.body)
+      tail: requestImage(n.tail, n.fallbackTail) || head || note,
+      body: requestImage(n.body, n.fallbackBody)
     });
   }
-  info.hint = requestImage(layout.stageHint);
+  info.hint = requestImage(layout.stageHint, "mania-stage-hint");
   renderCache.info = info;
   renderCache.infoKeys = map.keys;
   renderCache.infoRev = rev;
@@ -721,7 +792,7 @@ function drawManiaStatic(g, layout, info) {
   }
   const stageLeft = layout.cols.length ? layout.cols[0].x : 0;
   const lastCol = layout.cols.length ? layout.cols[layout.cols.length - 1] : null;
-  const stageRight = lastCol ? lastCol.x + lastCol.w : 480;
+  const stageRight = lastCol ? lastCol.x + lastCol.w : STAGE_SIZE;
   const stageWidth = Math.max(1, stageRight - stageLeft);
   const hint = info.hint;
   if (hint) {
@@ -738,13 +809,13 @@ function drawManiaStatic(g, layout, info) {
 
 function stageBounds(layout) {
   let minX = 0;
-  let maxX = 480;
+  let maxX = STAGE_SIZE;
   if (layout.cols.length) {
     minX = Math.min(minX, layout.cols[0].x);
     const last = layout.cols[layout.cols.length - 1];
     maxX = Math.max(maxX, last.x + last.w);
   }
-  return { x: minX, y: 0, w: maxX - minX, h: 480 };
+  return { x: minX, y: 0, w: maxX - minX, h: STAGE_SIZE };
 }
 
 function getStaticLayer(layout, info, view, layerScale) {
@@ -792,7 +863,7 @@ function drawHoldBody(ctx, ci, style, colX, colW, yHead, yTail, visTop, visBotto
     return true;
   }
   const tileH = Math.max(0.5, img.height * s);
-  const maxTiles = 64;
+  const maxTiles = NOTE_BODY_MAX_TILES;
   let drawn = 0;
   if (style === 2) {
     const k = Math.max(0, Math.floor((yHead - bottom) / tileH));
@@ -824,7 +895,7 @@ function visibleStartIndex(map, scroll, now, t) {
   const notes = map.notes;
   if (renderCache.cursorMap !== map || t < renderCache.cursorTime - 1500) {
     renderCache.cursorMap = map;
-    renderCache.cursor = Math.max(0, findFirstGE(notes, t - 30000, (n) => n.time));
+    renderCache.cursor = Math.max(0, findFirstGE(notes, t - NOTE_LOOKBACK_MS, (n) => n.time));
   }
   let i = renderCache.cursor;
   while (i < notes.length) {
@@ -846,7 +917,7 @@ function renderMania(ctx, map, t, scale) {
   const layout = getManiaLayout(map.keys);
   const hitPosition = layout.hitPosition;
   const speed = num(settings.maniaScrollSpeedOverride, 0) > 0 ? num(settings.maniaScrollSpeedOverride, 0) : clamp(state.maniaScrollSpeed || 5, 1, 40);
-  const timeRange = (11485 / speed) * (hitPosition / 402);
+  const timeRange = (SCROLL_TIME_REFERENCE_MS / speed) * (hitPosition / DEFAULT_HIT_POSITION);
   const scroll = getScroll(map, timeRange);
   const now = scroll.at(t);
   const opacity = clamp(num(settings.playfieldOpacity, 1), 0, 1);
@@ -864,17 +935,17 @@ function renderMania(ctx, map, t, scale) {
   for (let i = start; i < map.notes.length; i++) {
     const note = map.notes[i];
     const fracHead = scroll.at(note.time) - now;
-    if (fracHead > 1.3) break;
+    if (fracHead > SPAWN_MARGIN) break;
     const fracTail = note.hold ? scroll.at(note.endTime) - now : fracHead;
     const yHead = hitPosition - fracHead * hitPosition;
     const yTail = hitPosition - fracTail * hitPosition;
-    if (Math.min(yHead, yTail) > hitPosition + 80) continue;
-    if (Math.max(yHead, yTail) < -80) continue;
+    if (Math.min(yHead, yTail) > hitPosition + NOTE_VIEW_MARGIN) continue;
+    if (Math.max(yHead, yTail) < -NOTE_VIEW_MARGIN) continue;
     const col = layout.cols[note.column];
     if (!col) continue;
     const ci = info[note.column];
     if (!ci) continue;
-    const height = layout.noteHeightScale > 0 ? layout.noteHeightScale : col.w;
+    const heightScale = layout.noteHeightScale > 0 ? layout.noteHeightScale : col.w;
     const cx = col.x + col.w / 2;
     if (note.hold) {
       const style = layout.bodyStyles ? layout.bodyStyles[note.column] : 0;
@@ -886,12 +957,18 @@ function renderMania(ctx, map, t, scale) {
       }
     }
     const head = note.hold ? (ci.head || ci.note) : ci.note;
-    if (head) drawImage2(ctx, head, cx, yHead, col.w, height);
-    else {
+    if (head) {
+      const height = noteDrawHeight(head, heightScale);
+      drawImage2(ctx, head, cx, yHead - height / 2, col.w, height);
+    } else {
+      const height = noteDrawHeight(null, heightScale);
       ctx.fillStyle = MANIA_FALLBACK[note.column % MANIA_FALLBACK.length];
-      ctx.fillRect(col.x, yHead - height / 2, col.w, height);
+      ctx.fillRect(col.x, yHead - height, col.w, height);
     }
-    if (note.hold && ci.tail) drawImage2(ctx, ci.tail, cx, yTail, col.w, height);
+    if (note.hold && ci.tail) {
+      const height = noteDrawHeight(ci.tail, heightScale);
+      drawImage2(ctx, ci.tail, cx, yTail + height / 2, col.w, height, true);
+    }
   }
   ctx.globalAlpha = 1;
 }
@@ -930,18 +1007,25 @@ function updateSettings(message) {
   }
 }
 
+function applySkinConfig(config, filePresent) {
+  state.skin = config;
+  state.skinFilePresent = !!filePresent;
+  state.skinRev += 1;
+}
+
 async function ensureSkin() {
   if (!settings.useSkin) return;
   if (state.skinFolder === state.loadedSkinFolder) return;
   state.loadedSkinFolder = state.skinFolder;
   imageState.clear();
   listingCache.clear();
-  state.skin = parseSkinIni("");
+  applySkinConfig(parseSkinIni(""), false);
   try {
     let res = await fetch("/files/skin/skin.ini", { cache: "no-store" });
     if (!res.ok) res = await fetch("/files/skin/Skin.ini", { cache: "no-store" });
-    if (res.ok) state.skin = parseSkinIni(await res.text());
+    if (res.ok) applySkinConfig(parseSkinIni(await res.text()), true);
   } catch (err) {
+    state.loadedSkinFolder = null;
     console.error("[BeatmapPreview] skin", err);
   }
 }
@@ -956,14 +1040,18 @@ function findListedBeatmapFile(html, expectedName) {
   return "";
 }
 
+function isRealFolderName(folder) {
+  const value = String(folder || "").trim();
+  return value !== "" && value !== "." && value !== "..";
+}
+
 async function fetchBeatmapTextFromListing() {
   const folder = String(state.beatmapFolder || "").trim();
   const fileName = String(state.beatmapFileName || "").trim();
-  if (!folder || !fileName) return null;
-  const host = location.host;
+  if (!isRealFolderName(folder) || !fileName) return null;
   for (let folderPad = 0; folderPad <= 2; folderPad += 1) {
     const folderName = " ".repeat(folderPad) + folder;
-    const listUrl = `http://${host}/files/beatmap/${encodeURIComponent(folderName)}/`;
+    const listUrl = `/files/beatmap/${encodeURIComponent(folderName)}/`;
     let html = "";
     try {
       const response = await fetch(listUrl, { cache: "no-store" });
@@ -974,7 +1062,7 @@ async function fetchBeatmapTextFromListing() {
     }
     const actualName = findListedBeatmapFile(html, fileName);
     if (!actualName) continue;
-    const fileUrl = `http://${host}/files/beatmap/${encodeURIComponent(folderName)}/${encodeURIComponent(actualName)}`;
+    const fileUrl = `${listUrl}${encodeURIComponent(actualName)}`;
     try {
       const response = await fetch(fileUrl, { cache: "no-store" });
       if (!response.ok) continue;
@@ -1007,11 +1095,12 @@ async function fetchBeatmapText() {
 }
 
 async function ensureBeatmap() {
-  const identity = state.checksum || (state.beatmapFolder && state.beatmapFileName ? `${state.beatmapFolder}/${state.beatmapFileName}` : "");
+  const identity = state.checksum || (isRealFolderName(state.beatmapFolder) && state.beatmapFileName ? `${state.beatmapFolder}/${state.beatmapFileName}` : "");
   if (!identity) return;
   const key = `${identity}|${state.gameMode}|${state.csConverted}`;
   if (state.loadedKey === key) return;
   if (state.pendingKey === key) return;
+  if (state.retryKey !== key) state.retryCount = 0;
   if (state.retryKey === key && performance.now() < state.retryAt) return;
   state.pendingKey = key;
   const token = ++state.loadToken;
@@ -1023,13 +1112,15 @@ async function ensureBeatmap() {
     state.beatmap = map;
     state.loadedKey = key;
     state.retryKey = "";
+    state.retryCount = 0;
     state.loadError = "";
     renderCache.cursorMap = null;
   } catch (err) {
     if (token !== state.loadToken) return;
     state.beatmap = null;
     state.retryKey = key;
-    state.retryAt = performance.now() + 2000;
+    state.retryCount += 1;
+    state.retryAt = performance.now() + Math.min(RETRY_MAX_MS, RETRY_BASE_MS * 2 ** (state.retryCount - 1));
     state.loadError = String((err && err.message) || err);
     console.error("[BeatmapPreview] beatmap fetch failed:", err);
   } finally {
@@ -1107,7 +1198,7 @@ function frame() {
 
   const t = renderTime();
   const keys = state.beatmap.keys;
-  const rev = `${t.toFixed(3)}|${keys}|${skinContentRev()}|${renderCache.loadedImages}|${state.maniaScrollSpeed}|${settings.maniaScrollSpeedOverride}|${settings.playfieldOpacity}|${settings.renderScale}|${settings.backgroundOpacity}|${settings.backgroundColor}|${width}|${height}`;
+  const rev = `${Math.round(t * 1000)}|${keys}|${skinContentRev()}|${renderCache.loadedImages}|${state.maniaScrollSpeed}|${settings.maniaScrollSpeedOverride}|${settings.playfieldOpacity}|${settings.renderScale}|${settings.backgroundOpacity}|${settings.backgroundColor}|${width}|${height}`;
   if (rev === lastDrawRev) return;
   lastDrawRev = rev;
   wasVisible = true;
@@ -1125,12 +1216,11 @@ function frame() {
     ctx.clearRect(lastPaddedView.x, lastPaddedView.y, lastPaddedView.w, lastPaddedView.h);
   }
   lastPaddedView = clear;
+  ctx.setTransform(vp.scale, 0, 0, vp.scale, vp.offsetX, vp.offsetY);
   if (bgOpacity > 0) {
     ctx.fillStyle = hexToRgba(settings.backgroundColor, bgOpacity);
     ctx.fillRect(view.x, view.y, view.w, view.h);
   }
-
-  ctx.setTransform(vp.scale, 0, 0, vp.scale, vp.offsetX, vp.offsetY);
   ctx.save();
   ctx.beginPath();
   ctx.rect(view.x, view.y, view.w, view.h);
@@ -1171,10 +1261,8 @@ function onV2(data) {
   if (!data) return;
   if (typeof data.client === "string" && data.client && data.client !== state.client) {
     state.client = data.client;
-    if (!settings.useSkin) {
-      imageState.clear();
-      listingCache.clear();
-    }
+    imageState.clear();
+    listingCache.clear();
   }
   const stateName = data.state && data.state.name;
   if (stateName) state.gameState = stateName;
@@ -1195,6 +1283,7 @@ function onV2(data) {
     state.checksum = checksum;
     state.loadError = "";
     state.retryKey = "";
+    state.retryCount = 0;
   }
   const live = Number(data.beatmap && data.beatmap.time && data.beatmap.time.live);
   if (Number.isFinite(live)) setTime(live, false);
@@ -1218,11 +1307,11 @@ function requestSettings(attempt) {
 }
 
 sockets.open("/websocket/v2", onV2, v2Filters);
-sockets.open("/websocket/v2/precise", onPrecise, ["currentTime"]);
-sockets.open("/websocket/commands", onCommand, null);
+sockets.open("/websocket/v2/precise", onPrecise, ["currentTime"], { optional: true });
+sockets.open("/websocket/commands", onCommand, null, { onOpen: () => requestSettings() });
 requestSettings();
 
-window.__beatmapPreview = {
+if (/[?&]debug(?:[=&]|$)/.test(location.search || "")) window.__beatmapPreview = {
   state,
   settings,
   parseOsu,
@@ -1240,6 +1329,8 @@ window.__beatmapPreview = {
   maniaSkin,
   maniaImageNames,
   defaultManiaColumnIndex,
+  noteDrawHeight,
+  isSafeAssetName,
   getColumnInfo,
   onV2,
   onPrecise,

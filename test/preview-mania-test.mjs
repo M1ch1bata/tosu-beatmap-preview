@@ -18,8 +18,19 @@ class E {
   animate() { return { cancel() {} }; }
 }
 const drawCalls = [];
-const ctxStub = new Proxy({ globalAlpha: 1 }, {
-  get: (t, p) => (p in t ? t[p] : (...a) => drawCalls.push(String(p))),
+const ctxTarget = {
+  globalAlpha: 1,
+  _m: [1, 0, 0, 1, 0, 0],
+  _stack: [],
+  setTransform(a, b, c, d, e, f) { this._m = [a, b, c, d, e, f]; drawCalls.push(["setTransform", a, b, c, d, e, f]); },
+  save() { this._stack.push(this._m.slice()); drawCalls.push(["save"]); },
+  restore() { if (this._stack.length) this._m = this._stack.pop(); drawCalls.push(["restore"]); },
+  translate(x, y) { const m = this._m; this._m = [m[0], m[1], m[2], m[3], m[0] * x + m[2] * y + m[4], m[1] * x + m[3] * y + m[5]]; drawCalls.push(["translate", x, y]); },
+  scale(x, y) { const m = this._m; this._m = [m[0] * x, m[1] * x, m[2] * y, m[3] * y, m[4], m[5]]; drawCalls.push(["scale", x, y]); },
+  fillRect(x, y, w, h) { drawCalls.push(["fillRect", x, y, w, h, this._m.slice()]); }
+};
+const ctxStub = new Proxy(ctxTarget, {
+  get: (t, p) => (p in t ? t[p] : (...a) => drawCalls.push([String(p), ...a])),
   set: (t, p, v) => { t[p] = v; return true; }
 });
 const bySel = new Map();
@@ -37,15 +48,26 @@ bySel.set(".tick-container", new E());
 bySel.set(".colors-container", new E());
 
 class WS { constructor(u) { this.url = u; this.readyState = 1; this.sent = []; } send(d) { this.sent.push(d); } close() {} }
-class Img { constructor() { this.width = 128; this.height = 128; } set src(v) { this._src = v; setTimeout(() => this.onerror && this.onerror(), 0); } get src() { return this._src; } }
+class Img {
+  constructor() { this.width = 512; this.height = 164; }
+  set src(v) {
+    this._src = v;
+    setTimeout(() => {
+      if (String(v).includes("default-skin")) this.onload && this.onload();
+      else this.onerror && this.onerror();
+    }, 0);
+  }
+  get src() { return this._src; }
+}
 
+const fetchCalls = [];
 const sb = {
   console, Date, Math, JSON, Number, Object, Array, Map, Set, String, Boolean, Error, Promise, Float64Array,
   parseInt, parseFloat, isNaN, setTimeout, clearTimeout,
   requestAnimationFrame: () => 0, cancelAnimationFrame: () => {}, performance,
   WebSocket: WS, Image: Img,
-  fetch: async () => ({ ok: false, status: 404, text: async () => "" }),
-  location: { host: "127.0.0.1:24050" },
+  fetch: async (url) => { fetchCalls.push(String(url)); return { ok: false, status: 404, text: async () => "" }; },
+  location: { host: "127.0.0.1:24050", search: "?debug" },
   document: doc,
   window: { self: {}, top: {}, COUNTER_PATH: "Beatmap Preview", innerWidth: 640, innerHeight: 480, devicePixelRatio: 1, addEventListener() {} }
 };
@@ -115,6 +137,48 @@ try {
 }
 check("render 120 frames no error", !renderError, renderError ? renderError.message : undefined);
 check("render produced draws", drawCalls.length > 0, { draws: drawCalls.length });
+
+api.settings.backgroundOpacity = 1;
+drawCalls.length = 0;
+api.frame();
+const bgFill = drawCalls.find((c) => Array.isArray(c) && c[0] === "fillRect" && c[3] === 480 && c[4] === 480 && Array.isArray(c[5]) && c[5][4] === 80);
+check("background respects viewport transform", !!bgFill, bgFill);
+
+check("note height keeps image aspect ratio", api.noteDrawHeight({ width: 512, height: 164 }, 30) === (30 * 164) / 512, api.noteDrawHeight({ width: 512, height: 164 }, 30));
+check("reject traversal asset name", api.isSafeAssetName("../../secret") === false && api.isSafeAssetName("C:/x") === false);
+check("accept subdir asset name", api.isSafeAssetName("sub/img") === true && api.isSafeAssetName("mania-note1") === true);
+
+api.state.checksum = "";
+api.state.beatmapFolder = ".";
+api.state.beatmapFileName = "nekodex - circles! (peppy).osu";
+api.state.loadedKey = "";
+api.state.pendingKey = "";
+api.state.retryKey = "";
+api.state.retryCount = 0;
+fetchCalls.length = 0;
+await api.ensureBeatmap();
+check("'.' folder (theme song) does not fetch beatmap", fetchCalls.length === 0, fetchCalls);
+
+api.settings.useSkin = true;
+api.state.client = "stable";
+api.state.loadedSkinFolder = "PlayerSkin";
+api.state.skin = api.parseSkinIni("[General]\nVersion: 2.7\n[Mania]\nKeys: 9\nNoteImage0: custom/missing\nKeyImage0: custom/missingkey\n");
+api.state.skinFilePresent = true;
+api.state.skinRev += 1;
+
+const layout10 = api.maniaSkin(10);
+check("unconfigured keycount uses default layout", layout10.cols.length === 10 && layout10.hitPosition === 402, { cols: layout10.cols.length, hit: layout10.hitPosition });
+
+const map9 = { keys: 9, notes: [], cps: [] };
+const layout9 = api.maniaSkin(9);
+api.getColumnInfo(map9, layout9);
+await new Promise((resolve) => setTimeout(resolve, 60));
+const info9 = api.getColumnInfo(map9, layout9);
+check(
+  "missing skin image falls back to default assets",
+  !!info9[0].note && info9[0].note.src.includes("default-skin") && !!info9[0].key && info9[0].key.src.includes("default-skin"),
+  { note: info9[0].note ? info9[0].note.src : null, key: info9[0].key ? info9[0].key.src : null }
+);
 
 console.log("Summary:", results.filter((r) => r.ok).length + "/" + results.length + " passed");
 process.exit(results.every((r) => r.ok) ? 0 : 1);

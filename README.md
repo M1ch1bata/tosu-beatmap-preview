@@ -4,14 +4,12 @@
 
 > A real-time beatmap preview overlay for [tosu](https://github.com/tosuapp/tosu) (osu!mania).
 
-![插件实时运行情况](docs/插件实时运行情况.gif)
-
 ## 1. 插件简介
 
-这是一个 tosu 静态插件，面向 osu!mania：
+这是一个 由Deepseek编写的 tosu 静态插件，面向 osu!mania：
 
 - 在**选歌界面**渲染当前选中谱面的下落预览，时间轴与游戏预览音频同步；
-- 使用 tosu 提供的**玩家皮肤**（解析 `skin.ini` 的 `[Mania]` 配置与自定义贴图），也可切换到内置默认皮肤（osu!stable / lazer 两套素材）；
+- 使用 tosu 提供的**玩家皮肤**（解析 `skin.ini` 的 `[Mania]` 配置与自定义贴图），也可切换到内置默认皮肤（osu!stable / lazer 两套素材）；皮肤未配置的键数或缺失的元素会自动回退到默认皮肤，与游戏内表现一致；
 - 只做「谱面预览」：不绘制分数、连击、判定，不影响游戏本身；
 - 进入游玩时默认自动隐藏（可关闭），支持 OBS 浏览器源与 tosu 游戏内覆盖层。
 
@@ -22,7 +20,7 @@
   - 解析 `skin.ini` 的 `[Mania]` 段：`ColumnWidth` / `ColumnSpacing` / `ColumnStart` / `HitPosition` / `StageHint` / `WidthForNoteHeightScale`；
   - `NoteBodyStyle` 支持全局与逐列级联（并按 `[General] Version >= 2.5` 决定默认值）；
   - 支持自定义 `NoteImage*` / `KeyImage*`（含子目录、动画帧 `-0`、大小写不敏感精确匹配）。
-- **内置默认皮肤**：`default-skin/stable`、`default-skin/lazer` 两套 `@2x` 素材，关闭「Use Player Skin」时使用，无需外部文件。
+- **内置默认皮肤 + 逐元素回退**：`default-skin/stable`、`default-skin/lazer` 两套 `@2x` 素材；关闭「Use Player Skin」时全部使用内置素材，开启时玩家皮肤缺失的键数配置 / 贴图会逐元素回退到对应客户端的默认皮肤（与 osu!stable / lazer 行为一致）。
 - **高键数自适应**：6K 及以上、皮肤舞台宽度超出 480 时自动扩展渲染视口，整段舞台完整可见。
 - **近似转换预览**：osu!standard 谱面按列近似转换预览；taiko / catch 显示提示。
 - **性能优化**：静态层缓存、可见音符游标、局部清屏、`desynchronized` 画布、长条源矩形绘制；可选 FPS 上限。
@@ -34,7 +32,6 @@
 
 - [tosu](https://github.com/tosuapp/tosu)（推荐 4.26+）；
 - osu!stable 或 osu!lazer；
-- 需要预览 mania 谱面（std 谱面会以近似转换方式预览）。
 
 ### 安装
 
@@ -59,21 +56,21 @@ git clone https://github.com/M1ch1bata/tosu-beatmap-preview.git "tosu/static/Bea
 
 ### 设置项
 
-| 设置 | 说明 | 默认 |
-| --- | --- | --- |
-| Background Color / Opacity | 背景色与不透明度（0 = 全透明） | `#000000` / `0` |
-| Render Scale (%) | 谱面在窗口内的缩放 | `100` |
-| Show In Song Select | 选歌界面显示预览 | 开 |
-| Auto Hide In Gameplay | 进入游玩自动隐藏 | 开 |
-| Use Player Skin | 使用玩家皮肤；关闭则使用内置默认皮肤 | 开 |
-| Mania Scroll Speed Override | 覆盖游戏滚动速度（0 = 跟随游戏） | `0` |
-| Playfield Opacity | 谱面 / 音符不透明度 | `1` |
-| FPS Limit | 重绘帧率上限（0 = 不限） | `0` |
+| 设置                          | 说明                 | 默认              |
+| --------------------------- | ------------------ | --------------- |
+| Background Color / Opacity  | 背景色与不透明度（0 = 全透明）  | `#000000` / `0` |
+| Render Scale (%)            | 谱面在窗口内的缩放          | `100`           |
+| Show In Song Select         | 选歌界面显示预览           | 开               |
+| Auto Hide In Gameplay       | 进入游玩自动隐藏           | 开               |
+| Use Player Skin             | 使用玩家皮肤；缺失的键数 / 元素回退到内置默认皮肤；关闭则全部使用内置默认皮肤 | 开               |
+| Mania Scroll Speed Override | 覆盖游戏滚动速度（0 = 跟随游戏） | `0`             |
+| Playfield Opacity           | 谱面 / 音符不透明度        | `1`             |
+| FPS Limit                   | 重绘帧率上限（0 = 不限）     | `0`             |
 
 ### 常见问题
 
 - **预览没有使用我的皮肤？**
-  确认游戏内已选择该皮肤，且插件设置中 `Use Player Skin` 为开；插件通过 tosu 的 `/files/skin/` 读取皮肤目录，无法读取时会回退到内置默认皮肤。
+  确认游戏内已选择该皮肤，且插件设置中 `Use Player Skin` 为开；插件通过 tosu 的 `/files/skin/` 读取皮肤目录。若该皮肤没有为某个键数提供 `[Mania]` 配置，或配置引用的贴图文件不存在，该键数 / 元素会像游戏内一样回退到客户端默认皮肤。
 - **6K / 7K / 8K 显示不全？**
   0.7.6 起已按皮肤舞台边界自动扩展视口；若仍有异常请附 `skin.ini` 的 `[Mania]` 段反馈。
 - **游戏内覆盖层卡顿？**
@@ -96,20 +93,31 @@ git clone https://github.com/M1ch1bata/tosu-beatmap-preview.git "tosu/static/Bea
 ### 提交 PR
 
 1. Fork 本仓库并新建分支（如 `fix/lazer-skin`）；
+
 2. 修改后运行测试，确保全绿：
 
    ```bash
-   node test/preview-mania-test.mjs   # 当前 16 项断言，无需安装依赖
+   node test/preview-mania-test.mjs   # 当前 23 项断言，无需安装依赖
    ```
 
 3. 提交 PR，说明变更动机与验证方式。
 
-### 开发说明
+## 更新日志
 
-- 纯前端、无构建步骤：`main.js` + `index.html` + `main.css` + `settings.json` + `metadata.txt` + `default-skin/`；
-- 浏览器调试接口：`window.__beatmapPreview`（暴露 state / 解析 / 渲染等函数）；
-- 测试基于 Node 内置 `vm` 模拟 DOM，可在无 tosu 环境下验证解析、布局与渲染逻辑；
-- 代码风格：2 空格缩进、保持现有模块内聚，避免引入全局变量与构建依赖。
+### 0.7.7
+
+- 新增皮肤逐元素回退：玩家皮肤未配置的键数或缺失的贴图自动使用内置客户端默认皮肤；
+- 修正音符头 / 尾高度未按贴图宽高比与 `WidthForNoteHeightScale` 计算的问题（含底边对齐与长条尾部垂直翻转）；
+- 修正背景色未随 Render Scale / 窗口居中变换绘制的问题；
+- 修正皮肤配置异步加载期间可能缓存错误布局 / 贴图名的问题；
+- 修正主菜单主题曲被当作已选谱面、导致每 2 秒重试并全量列举 Songs 目录的问题，并加入指数退避；
+- 皮肤贴图路径过滤 `..`，拒绝越权读取；远程请求改为相对路径；
+- `/websocket/v2/precise` 缺失时不再无限重连；commands socket 重连后自动重新请求设置；
+- 音符 / 长条高度、视口边距、滚动基准等魔法数字提取为常量。
+
+### 0.7.6
+
+- 首个版本：选歌预览、皮肤解析、内置默认皮肤、滚动速度与显示设置。
 
 ## 致谢
 
