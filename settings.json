@@ -56,6 +56,14 @@
         "value": true
     },
     {
+        "uniqueID": "lazerSkinFile",
+        "type": "text",
+        "title": "Lazer Skin File (.osk)",
+        "description": "osu!lazer only: name of an .osk exported from lazer and copied into this counter's folder (e.g. My Skin.osk). empty = auto-try \"<current skin name>.osk\", player.osk, skin.osk",
+        "options": [],
+        "value": ""
+    },
+    {
         "uniqueID": "maniaScrollSpeedOverride",
         "type": "number",
         "title": "Mania Scroll Speed Override (0 = game)",

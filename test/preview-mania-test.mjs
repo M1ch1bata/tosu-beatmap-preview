@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import vm from "node:vm";
+import zlib from "node:zlib";
 
 const code = fs.readFileSync(new URL("../main.js", import.meta.url), "utf8");
 
@@ -53,20 +54,28 @@ class Img {
   set src(v) {
     this._src = v;
     setTimeout(() => {
-      if (String(v).includes("default-skin")) this.onload && this.onload();
+      if (String(v).includes("default-skin") || String(v).startsWith("blob:")) this.onload && this.onload();
       else this.onerror && this.onerror();
     }, 0);
   }
   get src() { return this._src; }
 }
 
+let oskServe = null;
 const fetchCalls = [];
 const sb = {
   console, Date, Math, JSON, Number, Object, Array, Map, Set, String, Boolean, Error, Promise, Float64Array,
   parseInt, parseFloat, isNaN, setTimeout, clearTimeout,
+  DataView, Uint8Array, TextDecoder, Blob, Response, DecompressionStream, URL,
   requestAnimationFrame: () => 0, cancelAnimationFrame: () => {}, performance,
   WebSocket: WS, Image: Img,
-  fetch: async (url) => { fetchCalls.push(String(url)); return { ok: false, status: 404, text: async () => "" }; },
+  fetch: async (url) => {
+    fetchCalls.push(String(url));
+    if (oskServe && String(url).includes("Test.osk")) {
+      return { ok: true, status: 200, text: async () => "", arrayBuffer: async () => oskServe };
+    }
+    return { ok: false, status: 404, text: async () => "" };
+  },
   location: { host: "127.0.0.1:24050", search: "?debug" },
   document: doc,
   window: { self: {}, top: {}, COUNTER_PATH: "Beatmap Preview", innerWidth: 640, innerHeight: 480, devicePixelRatio: 1, addEventListener() {} }
@@ -179,6 +188,94 @@ check(
   !!info9[0].note && info9[0].note.src.includes("default-skin") && !!info9[0].key && info9[0].key.src.includes("default-skin"),
   { note: info9[0].note ? info9[0].note.src : null, key: info9[0].key ? info9[0].key.src : null }
 );
+
+function makeZip(entries) {
+  const chunks = [];
+  const central = [];
+  let offset = 0;
+  for (const entry of entries) {
+    const raw = Buffer.from(entry.data);
+    const comp = entry.deflate ? zlib.deflateRawSync(raw) : raw;
+    const name = Buffer.from(entry.name, "utf8");
+    const local = Buffer.alloc(30);
+    local.writeUInt32LE(0x04034b50, 0);
+    local.writeUInt16LE(20, 4);
+    local.writeUInt16LE(0x0800, 6);
+    local.writeUInt16LE(entry.deflate ? 8 : 0, 8);
+    local.writeUInt32LE(comp.length, 18);
+    local.writeUInt32LE(raw.length, 22);
+    local.writeUInt16LE(name.length, 26);
+    chunks.push(local, name, comp);
+    const cd = Buffer.alloc(46);
+    cd.writeUInt32LE(0x02014b50, 0);
+    cd.writeUInt16LE(20, 4);
+    cd.writeUInt16LE(20, 6);
+    cd.writeUInt16LE(0x0800, 8);
+    cd.writeUInt16LE(entry.deflate ? 8 : 0, 10);
+    cd.writeUInt32LE(comp.length, 20);
+    cd.writeUInt32LE(raw.length, 24);
+    cd.writeUInt16LE(name.length, 28);
+    cd.writeUInt32LE(offset, 42);
+    central.push(Buffer.concat([cd, name]));
+    offset += local.length + name.length + comp.length;
+  }
+  const centralBuf = Buffer.concat(central);
+  const eocd = Buffer.alloc(22);
+  eocd.writeUInt32LE(0x06054b50, 0);
+  eocd.writeUInt16LE(entries.length, 8);
+  eocd.writeUInt16LE(entries.length, 10);
+  eocd.writeUInt32LE(centralBuf.length, 12);
+  eocd.writeUInt32LE(offset, 16);
+  const total = Buffer.concat([...chunks, centralBuf, eocd]);
+  return total.buffer.slice(total.byteOffset, total.byteOffset + total.byteLength);
+}
+
+const oskBuffer = makeZip([
+  { name: "skin.ini", data: "[General]\nVersion: 2.7\n[Mania]\nKeys: 4\nColumnWidth: 40\n", deflate: true },
+  { name: "mania-note1@2x.png", data: Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]), deflate: true },
+  { name: "sub/img.png", data: Buffer.from([1, 2, 3, 4]), deflate: false }
+]);
+const osk = await api.parseOsk(oskBuffer);
+check("parse .osk reads deflated skin.ini", osk.skinIni.includes("ColumnWidth: 40"), osk.skinIni.split("\n").pop());
+check("parse .osk lists entries", osk.files.has("mania-note1@2x.png") && osk.files.has("sub/img.png"));
+
+api.settings.lazerSkinFile = "";
+api.state.skinName = "My Skin";
+const candidates = api.oskCandidates();
+check(
+  "osk candidates include skin name and fallbacks",
+  candidates.includes("My Skin.osk") && candidates.includes("player.osk") && candidates.includes("skin.osk"),
+  candidates
+);
+api.settings.lazerSkinFile = "../evil";
+const safeCandidates = api.oskCandidates();
+check("osk candidates reject unsafe names", safeCandidates.every((n) => !n.includes("..")), safeCandidates);
+api.settings.lazerSkinFile = "";
+
+api.state.osk = osk;
+const oskImage = await api.findOskImage("mania-note1");
+check("osk image lookup by image name", !!oskImage && String(oskImage.src).startsWith("blob:"), oskImage ? oskImage.src : null);
+const oskSub = await api.findOskImage("sub/img");
+check("osk image lookup in subfolder", !!oskSub && String(oskSub.src).startsWith("blob:"), oskSub ? oskSub.src : null);
+api.state.osk = null;
+
+oskServe = oskBuffer;
+api.settings.useSkin = true;
+api.settings.lazerSkinFile = "";
+api.state.client = "lazer";
+api.state.skinName = "";
+api.state.oskKey = "";
+await api.onV2({
+  client: "lazer",
+  state: { name: "selectPlay" },
+  settings: { mode: { name: "mania" }, mania: { scrollSpeed: 5 }, skin: { name: "Test" } }
+});
+await new Promise((resolve) => setTimeout(resolve, 40));
+check("lazer .osk loaded from counter folder", !!api.state.osk && api.state.oskFile === "Test.osk", { file: api.state.oskFile, hasOsk: !!api.state.osk });
+api.getColumnInfo({ keys: 4, notes: [], cps: [] }, api.maniaSkin(4));
+await new Promise((resolve) => setTimeout(resolve, 40));
+const oskInfo = api.getColumnInfo({ keys: 4, notes: [], cps: [] }, api.maniaSkin(4));
+check("lazer .osk image used for rendering", !!oskInfo[0].note && String(oskInfo[0].note.src).startsWith("blob:"), oskInfo[0].note ? oskInfo[0].note.src : null);
 
 console.log("Summary:", results.filter((r) => r.ok).length + "/" + results.length + " passed");
 process.exit(results.every((r) => r.ok) ? 0 : 1);

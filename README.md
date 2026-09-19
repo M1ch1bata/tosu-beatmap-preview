@@ -20,6 +20,7 @@
   - 解析 `skin.ini` 的 `[Mania]` 段：`ColumnWidth` / `ColumnSpacing` / `ColumnStart` / `HitPosition` / `StageHint` / `WidthForNoteHeightScale`；
   - `NoteBodyStyle` 支持全局与逐列级联（并按 `[General] Version >= 2.5` 决定默认值）；
   - 支持自定义 `NoteImage*` / `KeyImage*`（含子目录、动画帧 `-0`、大小写不敏感精确匹配）。
+- **osu!lazer 皮肤（.osk）**：lazer 的皮肤文件按 SHA-256 哈希存储，tosu 无法直接列出皮肤目录；把 lazer 导出的 `.osk` 放进本插件目录（或用 `Lazer Skin File` 指定），插件会在浏览器内解压并解析 `skin.ini` / 贴图，渲染效果与 stable 一致。
 - **内置默认皮肤 + 逐元素回退**：`default-skin/stable`、`default-skin/lazer` 两套 `@2x` 素材；关闭「Use Player Skin」时全部使用内置素材，开启时玩家皮肤缺失的键数配置 / 贴图会逐元素回退到对应客户端的默认皮肤（与 osu!stable / lazer 行为一致）。
 - **高键数自适应**：6K 及以上、皮肤舞台宽度超出 480 时自动扩展渲染视口，整段舞台完整可见。
 - **近似转换预览**：osu!standard 谱面按列近似转换预览；taiko / catch 显示提示。
@@ -54,6 +55,17 @@ git clone https://github.com/M1ch1bata/tosu-beatmap-preview.git "tosu/static/Bea
 
 在选歌界面即可看到预览；进入游玩后默认自动隐藏。
 
+### osu!lazer 玩家皮肤（.osk）
+
+lazer 的皮肤文件按 SHA-256 哈希存放（`<数据目录>/files/<h>/<xx>/<hash>`），不存在 stable 那样的 `Skins` 目录，tosu 无法列出皮肤文件，因此需要手动提供 `.osk`：
+
+1. 在 lazer 中导出当前皮肤为 `.osk`（皮肤编辑器 / 皮肤列表中的导出按钮），文件名通常就是皮肤名；
+2. 把 `.osk` 复制到本插件目录（`static/Beatmap Preview/`）；
+3. 保持 `Use Player Skin` 为开：插件会依次尝试「设置里的 `Lazer Skin File`」→「`<当前皮肤名>.osk`」→ `player.osk` → `skin.osk`；
+4. 未提供 `.osk`（或文件无法解析）时回退到内置 lazer 默认皮肤，并在画面底部提示。
+
+> 说明：`.osk` 在浏览器内解压（ZIP + `DecompressionStream`），贴图以 Blob URL 缓存在内存中，不会写回游戏目录。
+
 ### 设置项
 
 | 设置                          | 说明                 | 默认              |
@@ -63,6 +75,7 @@ git clone https://github.com/M1ch1bata/tosu-beatmap-preview.git "tosu/static/Bea
 | Show In Song Select         | 选歌界面显示预览           | 开               |
 | Auto Hide In Gameplay       | 进入游玩自动隐藏           | 开               |
 | Use Player Skin             | 使用玩家皮肤；缺失的键数 / 元素回退到内置默认皮肤；关闭则全部使用内置默认皮肤 | 开               |
+| Lazer Skin File (.osk)      | lazer 专用：放在插件目录里的 .osk 文件名（留空则自动尝试 `<当前皮肤名>.osk`、`player.osk`、`skin.osk`） | 空               |
 | Mania Scroll Speed Override | 覆盖游戏滚动速度（0 = 跟随游戏） | `0`             |
 | Playfield Opacity           | 谱面 / 音符不透明度        | `1`             |
 | FPS Limit                   | 重绘帧率上限（0 = 不限）     | `0`             |
@@ -70,7 +83,9 @@ git clone https://github.com/M1ch1bata/tosu-beatmap-preview.git "tosu/static/Bea
 ### 常见问题
 
 - **预览没有使用我的皮肤？**
-  确认游戏内已选择该皮肤，且插件设置中 `Use Player Skin` 为开；插件通过 tosu 的 `/files/skin/` 读取皮肤目录。若该皮肤没有为某个键数提供 `[Mania]` 配置，或配置引用的贴图文件不存在，该键数 / 元素会像游戏内一样回退到客户端默认皮肤。
+  确认游戏内已选择该皮肤，且插件设置中 `Use Player Skin` 为开；stable 下插件通过 tosu 的 `/files/skin/` 读取皮肤目录。若该皮肤没有为某个键数提供 `[Mania]` 配置，或配置引用的贴图文件不存在，该键数 / 元素会像游戏内一样回退到客户端默认皮肤。
+- **lazer 下预览是默认皮肤？**
+  lazer 无法通过 tosu 读取皮肤目录，请按上方「osu!lazer 玩家皮肤（.osk）」把导出的 `.osk` 放进插件目录，或用 `Lazer Skin File` 指定文件名。
 - **6K / 7K / 8K 显示不全？**
   0.7.6 起已按皮肤舞台边界自动扩展视口；若仍有异常请附 `skin.ini` 的 `[Mania]` 段反馈。
 - **游戏内覆盖层卡顿？**
@@ -97,12 +112,18 @@ git clone https://github.com/M1ch1bata/tosu-beatmap-preview.git "tosu/static/Bea
 2. 修改后运行测试，确保全绿：
 
    ```bash
-   node test/preview-mania-test.mjs   # 当前 23 项断言，无需安装依赖
+   node test/preview-mania-test.mjs   # 当前 31 项断言，无需安装依赖
    ```
 
 3. 提交 PR，说明变更动机与验证方式。
 
 ## 更新日志
+
+### 0.7.8
+
+- 新增 osu!lazer 玩家皮肤支持：读取插件目录中的 `.osk`（依次尝试 `Lazer Skin File` → `<当前皮肤名>.osk` → `player.osk` → `skin.osk`），在浏览器内解压并解析 `skin.ini` 与贴图；
+- 从 tosu v2 读取 `settings.skin.name`；皮肤名 / 客户端 / 设置变化时自动重载并释放旧 Blob URL；
+- 缺少 `.osk` 时保持内置默认皮肤回退，并在状态栏提示导出方法。
 
 ### 0.7.7
 

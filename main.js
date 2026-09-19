@@ -67,6 +67,7 @@ const NOTE_VIEW_MARGIN = 80;
 const NOTE_BODY_MAX_TILES = 64;
 const DEFAULT_NOTE_ASPECT = 164 / 512;
 const OPTIONAL_SOCKET_RETRY_LIMIT = 5;
+const OSK_FALLBACK_FILES = ["player.osk", "skin.osk"];
 const RETRY_BASE_MS = 2000;
 const RETRY_MAX_MS = 30000;
 
@@ -77,6 +78,7 @@ const settings = {
   showInSongSelect: true,
   autoHideInGameplay: true,
   useSkin: true,
+  lazerSkinFile: "",
   maniaScrollSpeedOverride: 0,
   playfieldOpacity: 1,
   fpsLimit: 0
@@ -89,9 +91,14 @@ const state = {
   mapMode: "osu",
   checksum: "",
   skinFolder: "",
+  skinName: "",
   loadedSkinFolder: null,
   skinRev: 0,
   skinFilePresent: false,
+  osk: null,
+  oskFile: "",
+  oskKey: "",
+  oskToken: 0,
   csConverted: 4,
   maniaScrollSpeed: 0,
   beatmap: null,
@@ -459,7 +466,7 @@ function parseSkinIni(text) {
 }
 
 function skinContentRev() {
-  return `${state.loadedSkinFolder || ""}|${state.skinRev}|${settings.useSkin ? "1" : "0"}|${state.client}`;
+  return `${state.loadedSkinFolder || ""}|${state.skinRev}|${settings.useSkin ? "1" : "0"}|${state.client}|${state.oskFile}`;
 }
 
 function skinBodyStyleDefault() {
@@ -610,12 +617,186 @@ async function findImage(dirPrefix, files, name) {
   return null;
 }
 
+function decodeZipName(bytes, flags) {
+  if (flags & 0x0800) return new TextDecoder("utf-8").decode(bytes);
+  try {
+    return new TextDecoder("utf-8", { fatal: true }).decode(bytes);
+  } catch {
+    return new TextDecoder("windows-1252").decode(bytes);
+  }
+}
+
+async function oskEntryBytes(entry) {
+  if (entry.bytes) return entry.bytes;
+  const buffer = entry.buffer;
+  if (entry.method === 0) {
+    entry.bytes = new Uint8Array(buffer, entry.dataStart, entry.compSize);
+    return entry.bytes;
+  }
+  if (entry.method !== 8) throw new Error(`unsupported zip compression method ${entry.method}`);
+  if (typeof DecompressionStream === "undefined") throw new Error("DecompressionStream is not supported by this browser");
+  const compressed = new Uint8Array(buffer, entry.dataStart, entry.compSize);
+  const stream = new Blob([compressed]).stream().pipeThrough(new DecompressionStream("deflate-raw"));
+  entry.bytes = new Uint8Array(await new Response(stream).arrayBuffer());
+  return entry.bytes;
+}
+
+async function parseOsk(buffer) {
+  const view = new DataView(buffer);
+  const length = buffer.byteLength;
+  let eocd = -1;
+  const minOffset = Math.max(0, length - 22 - 0xffff);
+  for (let i = length - 22; i >= minOffset; i -= 1) {
+    if (view.getUint32(i, true) === 0x06054b50) {
+      eocd = i;
+      break;
+    }
+  }
+  if (eocd < 0) throw new Error("not a zip/osk archive");
+  const count = view.getUint16(eocd + 10, true);
+  let offset = view.getUint32(eocd + 16, true);
+  const files = new Map();
+  let skinIniEntry = null;
+  for (let i = 0; i < count; i += 1) {
+    if (offset + 46 > length || view.getUint32(offset, true) !== 0x02014b50) throw new Error("bad zip central directory");
+    const flags = view.getUint16(offset + 8, true);
+    const method = view.getUint16(offset + 10, true);
+    const compSize = view.getUint32(offset + 20, true);
+    const nameLen = view.getUint16(offset + 28, true);
+    const extraLen = view.getUint16(offset + 30, true);
+    const commentLen = view.getUint16(offset + 32, true);
+    const localOffset = view.getUint32(offset + 42, true);
+    if (compSize === 0xffffffff || localOffset === 0xffffffff) throw new Error("zip64 .osk is not supported");
+    const name = decodeZipName(new Uint8Array(buffer, offset + 46, nameLen), flags);
+    if (localOffset + 30 > length || view.getUint32(localOffset, true) !== 0x04034b50) throw new Error("bad zip local header");
+    const localNameLen = view.getUint16(localOffset + 26, true);
+    const localExtraLen = view.getUint16(localOffset + 28, true);
+    const dataStart = localOffset + 30 + localNameLen + localExtraLen;
+    if (dataStart + compSize > length) throw new Error("truncated zip entry");
+    const path = name.replace(/\\/g, "/").replace(/^\.\//, "");
+    if (path && !path.endsWith("/")) {
+      const entry = { path, method, compSize, dataStart, buffer, bytes: null, img: null, objectUrl: "", failed: false };
+      files.set(path.toLowerCase(), entry);
+      if (path.toLowerCase() === "skin.ini") skinIniEntry = entry;
+    }
+    offset += 46 + nameLen + extraLen + commentLen;
+  }
+  let skinIni = "";
+  if (skinIniEntry) skinIni = new TextDecoder("utf-8").decode(await oskEntryBytes(skinIniEntry));
+  return { files, skinIni };
+}
+
+async function loadOskImage(entry) {
+  if (entry.img) return entry.img;
+  if (entry.failed) return null;
+  try {
+    const bytes = await oskEntryBytes(entry);
+    const url = URL.createObjectURL(new Blob([bytes], { type: "image/png" }));
+    entry.objectUrl = url;
+    const img = await tryImageUrl(url);
+    if (!img) {
+      entry.failed = true;
+      URL.revokeObjectURL(url);
+      entry.objectUrl = "";
+      return null;
+    }
+    entry.img = img;
+    return img;
+  } catch (err) {
+    entry.failed = true;
+    return null;
+  }
+}
+
+async function findOskImage(name) {
+  const osk = state.osk;
+  if (!osk) return null;
+  const { dir, base } = splitSkinPath(name);
+  const candidates = [`${base}@2x.png`, `${base}.png`, `${base}-0@2x.png`, `${base}-0.png`];
+  for (const candidate of candidates) {
+    const entry = osk.files.get(`${dir}${candidate}`.toLowerCase());
+    if (!entry) continue;
+    const img = await loadOskImage(entry);
+    if (img) return img;
+  }
+  return null;
+}
+
+function releaseOsk() {
+  if (state.osk) {
+    for (const entry of state.osk.files.values()) {
+      if (entry.objectUrl) URL.revokeObjectURL(entry.objectUrl);
+      entry.img = null;
+    }
+  }
+  state.osk = null;
+  state.oskFile = "";
+}
+
+function oskCandidates() {
+  const list = [];
+  const configured = String(settings.lazerSkinFile || "").trim();
+  if (configured) list.push(configured.toLowerCase().endsWith(".osk") ? configured : `${configured}.osk`);
+  if (state.skinName) list.push(`${state.skinName}.osk`);
+  for (const fallback of OSK_FALLBACK_FILES) list.push(fallback);
+  const seen = new Set();
+  const out = [];
+  for (const name of list) {
+    const clean = name.replace(/\\/g, "/");
+    if (seen.has(clean.toLowerCase()) || !isSafeAssetName(clean)) continue;
+    seen.add(clean.toLowerCase());
+    out.push(clean);
+  }
+  return out;
+}
+
+async function fetchBinary(url) {
+  try {
+    const response = await fetch(url, { cache: "no-store" });
+    if (!response.ok) return null;
+    return await response.arrayBuffer();
+  } catch {
+    return null;
+  }
+}
+
+async function ensureLazerOsk() {
+  const candidates = oskCandidates();
+  const key = `${state.client}|${state.skinName}|${candidates.join("|")}`;
+  if (state.oskKey === key) return;
+  state.oskKey = key;
+  const token = ++state.oskToken;
+  releaseOsk();
+  imageState.clear();
+  applySkinConfig(parseSkinIni(""), false);
+  for (const name of candidates) {
+    const buffer = await fetchBinary(`./${encodeSkinPath(name)}`);
+    if (token !== state.oskToken) return;
+    if (!buffer) continue;
+    try {
+      const osk = await parseOsk(buffer);
+      if (token !== state.oskToken) return;
+      state.osk = osk;
+      state.oskFile = name;
+      applySkinConfig(parseSkinIni(osk.skinIni), true);
+      return;
+    } catch (err) {
+      console.warn(`[BeatmapPreview] failed to read ${name}:`, err);
+    }
+  }
+}
+
 async function resolveImage(name, fallbackName) {
   if (!isSafeAssetName(name) || (fallbackName && !isSafeAssetName(fallbackName))) {
     console.warn("[BeatmapPreview] rejected unsafe skin asset name:", name);
     return null;
   }
   if (!settings.useSkin) return findImage(defaultSkinPrefix(), DEFAULT_SKIN_FILES, name);
+  if (state.osk) {
+    const oskImage = await findOskImage(name);
+    if (oskImage) return oskImage;
+    return findImage(defaultSkinPrefix(), DEFAULT_SKIN_FILES, fallbackName || name);
+  }
   const own = await findImage("/files/skin/", null, name);
   if (own) return own;
   // Elements missing from the player skin fall back to the client default skin
@@ -987,6 +1168,10 @@ function statusText() {
     if (state.loadError) return `beatmap fetch failed: ${state.loadError} (retrying)`;
     return "loading beatmap...";
   }
+  if (state.client === "lazer" && settings.useSkin && state.oskKey && !state.osk) {
+    const wanted = String(settings.lazerSkinFile || "").trim() || (state.skinName ? `${state.skinName}.osk` : "player.osk");
+    return `lazer player skin not loaded: copy the exported skin into this counter folder as "${wanted}" (or set Lazer Skin File); using default skin`;
+  }
   return state.beatmap.notice || "";
 }
 
@@ -1003,6 +1188,12 @@ function updateSettings(message) {
       imageState.clear();
       listingCache.clear();
       state.loadedSkinFolder = null;
+      releaseOsk();
+      state.oskKey = "";
+    } else if (key === "lazerSkinFile") {
+      imageState.clear();
+      releaseOsk();
+      state.oskKey = "";
     }
   }
 }
@@ -1015,6 +1206,15 @@ function applySkinConfig(config, filePresent) {
 
 async function ensureSkin() {
   if (!settings.useSkin) return;
+  if (state.client === "lazer") {
+    await ensureLazerOsk();
+    return;
+  }
+  if (state.osk) {
+    releaseOsk();
+    state.oskKey = "";
+    imageState.clear();
+  }
   if (state.skinFolder === state.loadedSkinFolder) return;
   state.loadedSkinFolder = state.skinFolder;
   imageState.clear();
@@ -1240,7 +1440,8 @@ const v2Filters = [
     field: "settings",
     keys: [
       { field: "mode", keys: ["name"] },
-      { field: "mania", keys: ["scrollSpeed"] }
+      { field: "mania", keys: ["scrollSpeed"] },
+      { field: "skin", keys: ["name"] }
     ]
   },
   {
@@ -1263,11 +1464,15 @@ function onV2(data) {
     state.client = data.client;
     imageState.clear();
     listingCache.clear();
+    releaseOsk();
+    state.oskKey = "";
   }
   const stateName = data.state && data.state.name;
   if (stateName) state.gameState = stateName;
   const gameMode = data.settings && data.settings.mode && data.settings.mode.name;
   if (gameMode) state.gameMode = gameMode;
+  const skinName = data.settings && data.settings.skin && data.settings.skin.name;
+  if (typeof skinName === "string" && skinName !== state.skinName) state.skinName = skinName;
   const scrollSpeed = Number(data.settings && data.settings.mania && data.settings.mania.scrollSpeed);
   if (Number.isFinite(scrollSpeed)) state.maniaScrollSpeed = scrollSpeed;
   const mapMode = data.beatmap && data.beatmap.mode && data.beatmap.mode.name;
@@ -1328,6 +1533,9 @@ if (/[?&]debug(?:[=&]|$)/.test(location.search || "")) window.__beatmapPreview =
   fetchBeatmapText,
   maniaSkin,
   maniaImageNames,
+  parseOsk,
+  oskCandidates,
+  findOskImage,
   defaultManiaColumnIndex,
   noteDrawHeight,
   isSafeAssetName,
