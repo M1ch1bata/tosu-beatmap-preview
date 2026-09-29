@@ -34,8 +34,8 @@
     {
         "uniqueID": "showInSongSelect",
         "type": "checkbox",
-        "title": "Show In Song Select",
-        "description": "",
+        "title": "Show In Song Select / Multiplayer",
+        "description": "show the preview in song select and in multiplayer rooms (osu!stable matchSetup / selectMulti, lazer multi)",
         "options": [],
         "value": true
     },
@@ -51,7 +51,7 @@
         "uniqueID": "useSkin",
         "type": "checkbox",
         "title": "Use Player Skin",
-        "description": "on: use the currently selected player skin (including skin.ini mappings); key counts or elements the skin does not define fall back to the client default skin. off: always use the client default skin (osu!stable / lazer legacy assets)",
+        "description": "on: use the currently selected player skin (including skin.ini mappings); key counts or elements the skin does not define fall back to the bundled default skin (蓝白砖皮). off: always use the bundled default skin",
         "options": [],
         "value": true
     },

@@ -15,13 +15,13 @@
 
 ## 2. 主要特性
 
-- **实时预览**：跟随 `beatmap.time.live` 与谱面 timing（含 BPM / SV）渲染下落音符，选歌界面即可查看。
+- **实时预览**：跟随 `beatmap.time.live` 与谱面 timing（含 BPM / SV）渲染下落音符，选歌界面与多人房间（osu!stable `matchSetup` / `selectMulti`）均可查看。
 - **完整皮肤支持**
   - 解析 `skin.ini` 的 `[Mania]` 段：`ColumnWidth` / `ColumnSpacing` / `ColumnStart` / `HitPosition` / `StageHint` / `WidthForNoteHeightScale`；
   - `NoteBodyStyle` 支持全局与逐列级联（并按 `[General] Version >= 2.5` 决定默认值）；
   - 支持自定义 `NoteImage*` / `KeyImage*`（含子目录、动画帧 `-0`、大小写不敏感精确匹配）。
 - **osu!lazer 皮肤（.osk）**：lazer 的皮肤文件按 SHA-256 哈希存储，tosu 无法直接列出皮肤目录；把 lazer 导出的 `.osk` 放进本插件目录（或用 `Lazer Skin File` 指定），插件会在浏览器内解压并解析 `skin.ini` / 贴图，渲染效果与 stable 一致。
-- **内置默认皮肤 + 逐元素回退**：`default-skin/stable`、`default-skin/lazer` 两套 `@2x` 素材；关闭「Use Player Skin」时全部使用内置素材，开启时玩家皮肤缺失的键数配置 / 贴图会逐元素回退到对应客户端的默认皮肤（与 osu!stable / lazer 行为一致）。
+- **内置默认皮肤 + 逐元素回退**：内置皮肤为 **蓝白砖皮**（stable / lazer 各一套素材与 `skin.ini`）；关闭「Use Player Skin」时全部使用内置素材，开启时玩家皮肤缺失的键数配置 / 贴图会回退到内置默认皮肤（列宽、HitPosition、贴图均按内置 `skin.ini` 渲染，与 osu! 回退默认皮肤的行为一致）。
 - **高键数自适应**：6K 及以上、皮肤舞台宽度超出 480 时自动扩展渲染视口，整段舞台完整可见。
 - **近似转换预览**：osu!standard 谱面按列近似转换预览；taiko / catch 显示提示。
 - **性能优化**：静态层缓存、可见音符游标、局部清屏、`desynchronized` 画布、长条源矩形绘制；可选 FPS 上限。
@@ -47,6 +47,8 @@ git clone https://github.com/M1ch1bata/tosu-beatmap-preview.git "tosu/static/Bea
 
 重启 tosu 后，在 tosu 控制台的计数器 / 覆盖层列表中即可看到 **Beatmap Preview**。
 
+> 部署提示：请勿把 `.git` 目录放进 `static`（tosu 静态路由会原样提供其中的文件，本机可读到仓库元信息）。用 `git clone` 安装时可在部署后删除该目录，或改用 GitHub 的源码归档（不含 `.git`）。
+
 ### 添加为覆盖层
 
 - **OBS**：添加「浏览器源」，URL 填
@@ -62,7 +64,7 @@ lazer 的皮肤文件按 SHA-256 哈希存放（`<数据目录>/files/<h>/<xx>/<
 1. 在 lazer 中导出当前皮肤为 `.osk`（皮肤编辑器 / 皮肤列表中的导出按钮），文件名通常就是皮肤名；
 2. 把 `.osk` 复制到本插件目录（`static/Beatmap Preview/`）；
 3. 保持 `Use Player Skin` 为开：插件会依次尝试「设置里的 `Lazer Skin File`」→「`<当前皮肤名>.osk`」→ `player.osk` → `skin.osk`；
-4. 未提供 `.osk`（或文件无法解析）时回退到内置 lazer 默认皮肤，并在画面底部提示。
+4. 未提供 `.osk`（或文件无法解析）时回退到内置默认皮肤（蓝白砖皮），并在画面底部提示。
 
 > 说明：`.osk` 在浏览器内解压（ZIP + `DecompressionStream`），贴图以 Blob URL 缓存在内存中，不会写回游戏目录。
 
@@ -72,7 +74,7 @@ lazer 的皮肤文件按 SHA-256 哈希存放（`<数据目录>/files/<h>/<xx>/<
 | --------------------------- | ------------------ | --------------- |
 | Background Color / Opacity  | 背景色与不透明度（0 = 全透明）  | `#000000` / `0` |
 | Render Scale (%)            | 谱面在窗口内的缩放          | `100`           |
-| Show In Song Select         | 选歌界面显示预览           | 开               |
+| Show In Song Select / Multiplayer | 选歌界面与多人房间显示预览           | 开               |
 | Auto Hide In Gameplay       | 进入游玩自动隐藏           | 开               |
 | Use Player Skin             | 使用玩家皮肤；缺失的键数 / 元素回退到内置默认皮肤；关闭则全部使用内置默认皮肤 | 开               |
 | Lazer Skin File (.osk)      | lazer 专用：放在插件目录里的 .osk 文件名（留空则自动尝试 `<当前皮肤名>.osk`、`player.osk`、`skin.osk`） | 空               |
@@ -86,6 +88,8 @@ lazer 的皮肤文件按 SHA-256 哈希存放（`<数据目录>/files/<h>/<xx>/<
   确认游戏内已选择该皮肤，且插件设置中 `Use Player Skin` 为开；stable 下插件通过 tosu 的 `/files/skin/` 读取皮肤目录。若该皮肤没有为某个键数提供 `[Mania]` 配置，或配置引用的贴图文件不存在，该键数 / 元素会像游戏内一样回退到客户端默认皮肤。
 - **lazer 下预览是默认皮肤？**
   lazer 无法通过 tosu 读取皮肤目录，请按上方「osu!lazer 玩家皮肤（.osk）」把导出的 `.osk` 放进插件目录，或用 `Lazer Skin File` 指定文件名。
+- **多人房间里没有预览？**
+  0.8.0 起支持 osu!stable 多人房间（`matchSetup` / `selectMulti`），与选歌界面共用 `Show In Song Select / Multiplayer` 开关；房间内需已选择谱面（tosu 提供 `beatmap.checksum` 与 `beatmap.time.live` 时预览才会跟随房间预览音频）。
 - **6K / 7K / 8K 显示不全？**
   0.7.6 起已按皮肤舞台边界自动扩展视口；若仍有异常请附 `skin.ini` 的 `[Mania]` 段反馈。
 - **游戏内覆盖层卡顿？**
@@ -96,6 +100,20 @@ lazer 的皮肤文件按 SHA-256 哈希存放（`<数据目录>/files/<h>/<xx>/<
 ## 4. 贡献指南
 
 欢迎提交 Issue 与 PR。
+
+### 项目结构
+
+- `index.html` / `main.css`：页面与样式；
+- `main.js`：入口（画布、渲染循环、tosu WebSocket 接线、设置处理）；
+- `shared.js`：常量、全局状态、时间同步与 `RenderKey`；
+- `socket.js`：WebSocket 管理（重连 / 可选端点）；
+- `beatmap.js`：`.osu` 解析、mania 音符构建、滚动映射、谱面抓取重试；
+- `skin.js`：`skin.ini` 解析、布局 / 列名 / 贴图查找、默认皮肤加载；
+- `osk.js`：osu!lazer `.osk` 读取（浏览器内解压）；
+- `renderer.js`：画布绘制（静态层、音符、视口）；
+- `default-skin/`：内置默认皮肤；`test/`：Node 单测。
+
+> 浏览器使用原生 ES modules（无构建步骤）；测试按依赖顺序拼接各模块源码并校验 import/export 接线。
 
 ### 报告问题
 
@@ -112,12 +130,27 @@ lazer 的皮肤文件按 SHA-256 哈希存放（`<数据目录>/files/<h>/<xx>/<
 2. 修改后运行测试，确保全绿：
 
    ```bash
-   node test/preview-mania-test.mjs   # 当前 31 项断言，无需安装依赖
+   node test/preview-mania-test.mjs   # 当前 55 项断言，无需安装依赖
    ```
 
 3. 提交 PR，说明变更动机与验证方式。
 
 ## 更新日志
+
+### 0.8.0
+
+- 新增多人房间预览：osu!stable 的 `matchSetup` / `selectMulti` 状态默认显示预览，与选歌界面共用 `Show In Song Select / Multiplayer` 开关；
+- 修正暂停时谱面振动：时间源停顿时冻结在当前渲染位置，忽略小幅回跳，只有真正的 seek / 重开才回跳（此前每 100ms 一条消息都会把外推进度回拉）；
+- 修正音符越过判定线后仍继续绘制的问题：下落音符整体裁剪到判定线以内，普通音符在引导边到达判定线时消失，长条保留到尾部通过（此前允许绘制到判定线下方 80px）；
+- 内置默认皮肤替换为 **蓝白砖皮**，并支持读取 `default-skin/<client>/skin.ini`：关闭 `Use Player Skin`、或玩家皮肤缺少对应键数时，布局（`ColumnWidth` / `HitPosition` / `WidthForNoteHeightScale` 等）与贴图都按内置皮肤渲染；
+- 按客户端区分 `ColumnStart`：osu!lazer 忽略该字段（与客户端实现一致，舞台居中），osu!stable 沿用皮肤设置；
+- 修正渲染视口未按列的实际边界居中：皮肤指定 `ColumnStart` 时整个舞台会偏向一侧，现在始终在计数器内居中；
+- 移除无用的 `/websocket/v2/precise` 订阅（该通道只提供 `keys` / `hitErrors` / `tourney`，不提供 `currentTime`），减少约 100Hz 的空解析；
+- `.osk` 解压加入大小上限（16MB / 条目），避免异常压缩包导致内存暴涨；
+- 渲染输入收敛为 `RenderKey` 结构（时间、键数、皮肤版本、已加载贴图数、全部渲染设置、画布尺寸），逐字段比较替代每帧字符串拼接，并统一渲染缓存失效；
+- 代码拆分为 `shared / socket / beatmap / skin / osk / renderer / main` 模块（浏览器原生 ES modules，无构建步骤）；测试按序拼接模块源码并校验 import/export 接线；
+- 部署提示：不要携带 `.git` 目录；
+- `index.html` 更新 `main.js` 缓存参数，确保覆盖层 / 浏览器刷新后加载新代码。
 
 ### 0.7.8
 
@@ -143,7 +176,8 @@ lazer 的皮肤文件按 SHA-256 哈希存放（`<数据目录>/files/<h>/<xx>/<
 ## 致谢
 
 - [tosu](https://github.com/tosuapp/tosu)：提供实时数据与插件平台；
-- [osu! wiki](https://osu.ppy.sh/wiki/en/Skinning/skin.ini)：`skin.ini` mania 段与皮肤规范参考。
+- [osu! wiki](https://osu.ppy.sh/wiki/en/Skinning/skin.ini)：`skin.ini` mania 段与皮肤规范参考；
+- 内置默认皮肤素材来自 **蓝白砖皮**（`skin.ini` 中 `Author: Various Artist`），仅用于玩家皮肤不可用时的回退展示。
 
 ## 许可
 
