@@ -1,7 +1,7 @@
 // skin.js - skin.ini config resolution, mania layout/column names, image
 // lookup (player skin folder + bundled default) and skin loading.
-import { clamp, num, STAGE_SIZE, DEFAULT_HIT_POSITION, HIT_POSITION_MIN, DEFAULT_SKIN_FILES, settings, state, renderCache, imageState, listingCache, splitSkinPath, isSafeAssetName, encodeSkinPath, tryImageUrl, parseListingNames, parseSkinIni, applySkinConfig, skinContentRev } from "./shared.js";
-import { findOskImage, releaseOsk, ensureLazerOsk } from "./osk.js";
+import { clamp, num, STAGE_SIZE, DEFAULT_HIT_POSITION, HIT_POSITION_MIN, DEFAULT_SKIN_FILES, settings, state, renderCache, imageState, listingCache, splitSkinPath, isSafeAssetName, encodeSkinPath, tryImageUrl, parseListingNames, parseSkinIni, applySkinConfig, skinContentRev } from "./shared.js?v=0.8.1";
+import { findOskImage, releaseOsk, ensureLazerOsk } from "./osk.js?v=0.8.1";
 
 // Effective mania config for a key count: the player skin (folder / .osk) wins
 // when it defines that key count, otherwise the bundled default skin is used.
@@ -46,7 +46,13 @@ export function maniaSkin(keys) {
   };
   const widths = parseArray("columnwidth", keys, 30);
   const spacings = parseArray("columnspacing", Math.max(0, keys - 1), 0);
-  const hitPosition = clamp(num(cfg && cfg.hitposition, DEFAULT_HIT_POSITION), HIT_POSITION_MIN, STAGE_SIZE);
+  const rawHitPosition = clamp(num(cfg && cfg.hitposition, DEFAULT_HIT_POSITION), HIT_POSITION_MIN, STAGE_SIZE);
+  // [Mania] UpsideDown flips the stage vertically (DDR style): notes rise from
+  // the bottom and the judgement line is mirrored. The Force Upside Down
+  // setting wins so players whose skin does not declare it still get DDR.
+  const skinFlip = cfg && cfg.upsidedown !== undefined ? String(cfg.upsidedown).trim().toLowerCase() : "";
+  const upsideDown = !!settings.flipPlayfield || skinFlip === "1" || skinFlip === "true" || skinFlip === "yes";
+  const hitPosition = upsideDown ? STAGE_SIZE - rawHitPosition : rawHitPosition;
   const noteHeightScale = num(cfg && cfg.widthfornoteheightscale, 0);
   const total = widths.reduce((a, b) => a + b, 0) + spacings.reduce((a, b) => a + b, 0);
   // osu!lazer ignores ColumnStart (unimplemented upstream) and centres the stage
@@ -66,7 +72,7 @@ export function maniaSkin(keys) {
     const raw = cfg && cfg[`notebodystyle${i}`] !== undefined ? parseInt(cfg[`notebodystyle${i}`], 10) : NaN;
     bodyStyles[i] = Number.isFinite(raw) ? raw : globalStyle;
   }
-  return { cols, hitPosition, noteHeightScale: noteHeightScale > 0 ? noteHeightScale : 0, stageHint, bodyStyles };
+  return { cols, hitPosition, rawHitPosition, upsideDown, noteHeightScale: noteHeightScale > 0 ? noteHeightScale : 0, stageHint, bodyStyles };
 }
 
 export function getManiaLayout(keys, rev) {

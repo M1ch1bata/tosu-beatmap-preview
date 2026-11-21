@@ -1,5 +1,5 @@
 // socket.js - JSON websocket helper with reconnect and optional endpoints.
-import { OPTIONAL_SOCKET_RETRY_LIMIT } from "./shared.js";
+import { OPTIONAL_SOCKET_RETRY_LIMIT } from "./shared.js?v=0.8.1";
 
 export class SocketManager {
   constructor(host) {

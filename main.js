@@ -1,12 +1,12 @@
 // main.js - entry point: canvas setup, render loop, tosu websocket wiring and
 // settings handling. Modules: shared.js, socket.js, beatmap.js, osk.js,
 // skin.js, renderer.js.
-import { settings, state, renderKey, renderKeyScratch, buildRenderKey, renderKeyDiffers, renderTime, setTime, imageState, listingCache, isSafeAssetName, parseSkinIni, clamp, num, PREVIEW_STATES } from "./shared.js";
-import { SocketManager } from "./socket.js";
-import { ensureBeatmap, parseOsu, buildManiaNative, buildManiaFromStandard, buildBeatmapFor, makeScroll, getScroll, fetchBeatmapText } from "./beatmap.js";
-import { releaseOsk, parseOsk, oskCandidates, findOskImage } from "./osk.js";
-import { getManiaLayout, ensureSkin, maniaSkin, maniaImageNames, resolveManiaSource, ensureDefaultSkin, getColumnInfo, defaultManiaColumnIndex } from "./skin.js";
-import { hexToRgba, stageBounds, currentViewport, renderMania, noteDrawHeight, notePassedLine } from "./renderer.js";
+import { settings, state, renderKey, renderKeyScratch, buildRenderKey, renderKeyDiffers, renderTime, setTime, imageState, listingCache, isSafeAssetName, parseSkinIni, clamp, num, PREVIEW_STATES } from "./shared.js?v=0.8.1";
+import { SocketManager } from "./socket.js?v=0.8.1";
+import { ensureBeatmap, parseOsu, buildManiaNative, buildManiaFromStandard, buildBeatmapFor, makeScroll, getScroll, fetchBeatmapText } from "./beatmap.js?v=0.8.1";
+import { releaseOsk, parseOsk, oskCandidates, findOskImage } from "./osk.js?v=0.8.1";
+import { getManiaLayout, ensureSkin, maniaSkin, maniaImageNames, resolveManiaSource, ensureDefaultSkin, getColumnInfo, defaultManiaColumnIndex } from "./skin.js?v=0.8.1";
+import { hexToRgba, stageBounds, currentViewport, renderMania, noteDrawHeight, notePassedLine } from "./renderer.js?v=0.8.1";
 
 const canvas = document.getElementById("preview");
 const ctx = canvas.getContext("2d", { alpha: true, desynchronized: true });
@@ -90,7 +90,10 @@ function frame() {
   const text = statusText();
   if (statusEl.textContent !== text) statusEl.textContent = text;
 
-  const hasChart = state.beatmap && state.beatmap.notes && state.beatmap.notes.length > 0;
+  const hasChart =
+    !!state.beatmap &&
+    ((state.beatmap.notes && state.beatmap.notes.length > 0) ||
+      (settings.showBarlines && state.beatmap.bars && state.beatmap.bars.length > 0));
   if (!allowedState() || !hasChart) {
     if (wasVisible) {
       ctx.setTransform(1, 0, 0, 1, 0, 0);

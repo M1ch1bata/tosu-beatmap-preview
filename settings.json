@@ -86,5 +86,21 @@
         "description": "cap the redraw rate (e.g. 60) if the ingame overlay stutters",
         "options": [],
         "value": 0
+    },
+    {
+        "uniqueID": "showBarlines",
+        "type": "checkbox",
+        "title": "Show Bar Lines",
+        "description": "draw the map's measure lines (小节线) falling with the notes; timing-only maps with thousands of red lines and no hit objects are only visible through these",
+        "options": [],
+        "value": true
+    },
+    {
+        "uniqueID": "flipPlayfield",
+        "type": "checkbox",
+        "title": "Force Upside Down (DDR)",
+        "description": "notes rise from the bottom and the judgement line is mirrored; skins that already set [Mania] UpsideDown are flipped automatically, this forces it for skins that do not declare it",
+        "options": [],
+        "value": false
     }
 ]

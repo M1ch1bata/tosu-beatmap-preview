@@ -1,8 +1,8 @@
 // renderer.js - canvas drawing: static lane layer, falling notes and the
 // viewport mapping.
-import { clamp, num, findFirstGE, STAGE_SIZE, DEFAULT_HIT_POSITION, SCROLL_TIME_REFERENCE_MS, SPAWN_MARGIN, NOTE_VIEW_MARGIN, NOTE_BODY_MAX_TILES, DEFAULT_NOTE_ASPECT, NOTE_LOOKBACK_MS, MANIA_FALLBACK, settings, state, renderCache } from "./shared.js";
-import { getManiaLayout, getColumnInfo } from "./skin.js";
-import { getScroll } from "./beatmap.js";
+import { clamp, num, findFirstGE, STAGE_SIZE, DEFAULT_HIT_POSITION, SCROLL_TIME_REFERENCE_MS, SPAWN_MARGIN, NOTE_VIEW_MARGIN, NOTE_BODY_MAX_TILES, DEFAULT_NOTE_ASPECT, NOTE_LOOKBACK_MS, MANIA_FALLBACK, BARLINE_ALPHA, BARLINE_MIN_SPACING_PX, settings, state, renderCache } from "./shared.js?v=0.8.1";
+import { getManiaLayout, getColumnInfo } from "./skin.js?v=0.8.1";
+import { getScroll } from "./beatmap.js?v=0.8.1";
 
 export function hexToRgba(hex, alpha) {
   const m = /^#?([0-9a-f]{3}|[0-9a-f]{6})$/i.exec(String(hex || "").trim());
@@ -36,16 +36,20 @@ export function noteDrawHeight(img, heightScale) {
 
 export function drawManiaStatic(g, layout, info) {
   const hitPosition = layout.hitPosition;
+  const upsideDown = !!layout.upsideDown;
+  // lane background and receptors live on the note side of the judgement line
+  const laneTop = upsideDown ? hitPosition : 0;
+  const laneHeight = Math.max(0, upsideDown ? STAGE_SIZE - hitPosition : hitPosition);
   for (let i = 0; i < layout.cols.length; i++) {
     const col = layout.cols[i];
     g.globalAlpha = 0.55;
     g.fillStyle = "rgba(10,10,14,0.65)";
-    g.fillRect(col.x, 0, col.w, hitPosition);
+    g.fillRect(col.x, laneTop, col.w, laneHeight);
     const key = info[i] ? info[i].key : null;
     if (key) {
       const keyHeight = Math.max(1, col.w * (key.height / Math.max(1, key.width)));
       g.globalAlpha = 1;
-      drawImage2(g, key, col.x + col.w / 2, hitPosition - keyHeight / 2, col.w, keyHeight);
+      drawImage2(g, key, col.x + col.w / 2, upsideDown ? hitPosition + keyHeight / 2 : hitPosition - keyHeight / 2, col.w, keyHeight);
     }
   }
   const stageLeft = layout.cols.length ? layout.cols[0].x : 0;
@@ -102,7 +106,7 @@ export function getStaticLayer(layout, info, view, layerScale) {
   return layer;
 }
 
-export function drawHoldBody(ctx, ci, style, colX, colW, yHead, yTail, visTop, visBottom) {
+function drawHoldBodyNormal(ctx, ci, style, colX, colW, yHead, yTail, visTop, visBottom) {
   const img = ci.body;
   if (!img) return false;
   const rawTop = Math.min(yHead, yTail);
@@ -149,6 +153,19 @@ export function drawHoldBody(ctx, ci, style, colX, colW, yHead, yTail, visTop, v
   return true;
 }
 
+// Hold note body. Upside-down (DDR) stages mirror the whole playfield, so the
+// body is drawn in a flipped coordinate space instead of duplicating the tiling
+// logic (the tile phase then mirrors exactly like the game).
+export function drawHoldBody(ctx, ci, style, colX, colW, yHead, yTail, visTop, visBottom, upsideDown) {
+  if (!upsideDown) return drawHoldBodyNormal(ctx, ci, style, colX, colW, yHead, yTail, visTop, visBottom);
+  ctx.save();
+  ctx.translate(0, STAGE_SIZE);
+  ctx.scale(1, -1);
+  const ok = drawHoldBodyNormal(ctx, ci, style, colX, colW, STAGE_SIZE - yHead, STAGE_SIZE - yTail, STAGE_SIZE - visBottom, STAGE_SIZE - visTop);
+  ctx.restore();
+  return ok;
+}
+
 export function visibleStartIndex(map, scroll, now, t) {
   const notes = map.notes;
   if (renderCache.cursorMap !== map || t < renderCache.cursorTime - 1500) {
@@ -170,18 +187,59 @@ export function visibleStartIndex(map, scroll, now, t) {
   return i;
 }
 
-export function notePassedLine(note, yHead, yTail, hitPosition) {
+// Measure lines fall with the notes. Timing-only maps (thousands of red lines,
+// no hit objects) are invisible without them, so this is what makes such a map
+// readable in the preview. Spacing is capped in device pixels so a map with a
+// microsecond beat length cannot turn into a solid white wall or a slow frame.
+export function drawBarlines(ctx, map, scroll, now, t, layout, view, scale) {
+  const bars = map && map.bars;
+  if (!bars || bars.length === 0) return 0;
+  const unit = Number.isFinite(scale) && scale > 0 ? 1 / scale : 1;
+  const spacing = Math.max(unit, BARLINE_MIN_SPACING_PX * unit);
+  const upsideDown = !!layout.upsideDown;
+  const hitPosition = layout.hitPosition;
+  const scrollBase = layout.rawHitPosition || hitPosition;
+  const bottom = view.y + view.h;
+  ctx.fillStyle = `rgba(255,255,255,${BARLINE_ALPHA})`;
+  let drawn = 0;
+  let lastY = null;
+  let i = findFirstGE(bars, t, (v) => v);
+  for (; i < bars.length; i += 1) {
+    const frac = scroll.at(bars[i]) - now;
+    if (frac > SPAWN_MARGIN) break;
+    const y = upsideDown ? hitPosition + frac * scrollBase : hitPosition - frac * scrollBase;
+    if (upsideDown ? y > bottom + NOTE_VIEW_MARGIN : y < view.y - NOTE_VIEW_MARGIN) break;
+    if (lastY !== null && Math.abs(lastY - y) < spacing) continue;
+    ctx.fillRect(view.x, y - unit / 2, view.w, unit);
+    lastY = y;
+    drawn += 1;
+    if (drawn >= 4096) break;
+  }
+  return drawn;
+}
+
+export function notePassedLine(note, yHead, yTail, hitPosition, upsideDown) {
   // normal notes vanish once their leading (bottom) edge reaches the judgement
-  // line; hold notes stay visible until their tail does
-  return (note.hold ? yTail : yHead) > hitPosition;
+  // line; hold notes stay visible until their tail does. When the stage is
+  // flipped (DDR) the leading edge points the other way, so "past" means above
+  // the line instead of below it.
+  const edge = note.hold ? yTail : yHead;
+  return upsideDown ? edge < hitPosition : edge > hitPosition;
 }
 
 export function renderMania(ctx, map, t, scale, rev) {
-  if (!map.notes || !map.notes.length) return;
+  if (!map || !map.notes) return;
+  // timing-only maps (no hit objects) are still worth drawing: their bar lines
+  // are the whole point of the preview for them
+  const showBars = !!settings.showBarlines && !!(map.bars && map.bars.length);
+  if (!map.notes.length && !showBars) return;
   const layout = getManiaLayout(map.keys, rev);
-  const hitPosition = layout.hitPosition;
+  const upsideDown = !!layout.upsideDown;
+  const hitPosition = layout.hitPosition; // judgement line on screen
+  const scrollBase = layout.rawHitPosition || hitPosition;
+  const yAt = (frac) => (upsideDown ? hitPosition + frac * scrollBase : hitPosition - frac * scrollBase);
   const speed = num(settings.maniaScrollSpeedOverride, 0) > 0 ? num(settings.maniaScrollSpeedOverride, 0) : clamp(state.maniaScrollSpeed || 5, 1, 40);
-  const timeRange = (SCROLL_TIME_REFERENCE_MS / speed) * (hitPosition / DEFAULT_HIT_POSITION);
+  const timeRange = (SCROLL_TIME_REFERENCE_MS / speed) * (scrollBase / DEFAULT_HIT_POSITION);
   const scroll = getScroll(map, timeRange);
   const now = scroll.at(t);
   const opacity = clamp(num(settings.playfieldOpacity, 1), 0, 1);
@@ -194,11 +252,14 @@ export function renderMania(ctx, map, t, scale, rev) {
   ctx.drawImage(layer, view.x, view.y, view.w, view.h);
   ctx.globalAlpha = 1;
 
+  if (settings.showBarlines) drawBarlines(ctx, map, scroll, now, t, layout, view, scale);
+
   // Clip the falling notes to the play area: nothing may be drawn past the
   // judgement line (the lane / key images below it belong to the static layer).
   ctx.save();
   ctx.beginPath();
-  ctx.rect(view.x, view.y, view.w, Math.max(0, hitPosition - view.y));
+  if (upsideDown) ctx.rect(view.x, hitPosition, view.w, Math.max(0, view.y + view.h - hitPosition));
+  else ctx.rect(view.x, view.y, view.w, Math.max(0, hitPosition - view.y));
   ctx.clip();
 
   const start = visibleStartIndex(map, scroll, now, t);
@@ -208,10 +269,11 @@ export function renderMania(ctx, map, t, scale, rev) {
     const fracHead = scroll.at(note.time) - now;
     if (fracHead > SPAWN_MARGIN) break;
     const fracTail = note.hold ? scroll.at(note.endTime) - now : fracHead;
-    const yHead = hitPosition - fracHead * hitPosition;
-    const yTail = hitPosition - fracTail * hitPosition;
-    if (notePassedLine(note, yHead, yTail, hitPosition)) continue;
-    if (Math.max(yHead, yTail) < -NOTE_VIEW_MARGIN) continue;
+    const yHead = yAt(fracHead);
+    const yTail = yAt(fracTail);
+    if (notePassedLine(note, yHead, yTail, hitPosition, upsideDown)) continue;
+    if (Math.max(yHead, yTail) < view.y - NOTE_VIEW_MARGIN) continue;
+    if (Math.min(yHead, yTail) > view.y + view.h + NOTE_VIEW_MARGIN) continue;
     const col = layout.cols[note.column];
     if (!col) continue;
     const ci = info[note.column];
@@ -220,25 +282,31 @@ export function renderMania(ctx, map, t, scale, rev) {
     const cx = col.x + col.w / 2;
     if (note.hold) {
       const style = layout.bodyStyles ? layout.bodyStyles[note.column] : 0;
-      if (!drawHoldBody(ctx, ci, style ?? 0, col.x, col.w, yHead, yTail, -200, 680)) {
+      if (!drawHoldBody(ctx, ci, style ?? 0, col.x, col.w, yHead, yTail, -200, 680, upsideDown)) {
         const top = Math.min(yHead, yTail);
         const bottom = Math.max(yHead, yTail);
         ctx.fillStyle = MANIA_FALLBACK[note.column % MANIA_FALLBACK.length];
         ctx.fillRect(col.x, top, col.w, Math.max(1, bottom - top));
       }
     }
+    // A note head is consumed the moment it reaches the judgement line: once
+    // its time has passed it is no longer drawn at all (previously it kept
+    // sliding below the line until the clip caught up, which read as a long
+    // note crossing the judgement area).
+    const headVisible = fracHead > -1e-9;
     const head = note.hold ? (ci.head || ci.note) : ci.note;
-    if (head) {
+    if (head && headVisible) {
       const height = noteDrawHeight(head, heightScale);
-      drawImage2(ctx, head, cx, yHead - height / 2, col.w, height);
-    } else {
+      drawImage2(ctx, head, cx, upsideDown ? yHead + height / 2 : yHead - height / 2, col.w, height);
+    } else if (headVisible) {
       const height = noteDrawHeight(null, heightScale);
       ctx.fillStyle = MANIA_FALLBACK[note.column % MANIA_FALLBACK.length];
-      ctx.fillRect(col.x, yHead - height, col.w, height);
+      const top = upsideDown ? yHead : yHead - height;
+      ctx.fillRect(col.x, top, col.w, height);
     }
-    if (note.hold && ci.tail) {
+    if (note.hold && ci.tail && fracTail > -1e-9) {
       const height = noteDrawHeight(ci.tail, heightScale);
-      drawImage2(ctx, ci.tail, cx, yTail + height / 2, col.w, height, true);
+      drawImage2(ctx, ci.tail, cx, upsideDown ? yTail - height / 2 : yTail + height / 2, col.w, height, !upsideDown);
     }
   }
   ctx.globalAlpha = 1;

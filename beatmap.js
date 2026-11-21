@@ -1,6 +1,6 @@
 // beatmap.js - .osu parsing, mania note building, scroll mapping and the
 // beatmap fetch/retry loop.
-import { clamp, num, findLastLE, MODE_NAMES, state, renderCache, parseListingNames, RETRY_BASE_MS, RETRY_MAX_MS } from "./shared.js";
+import { clamp, num, findLastLE, MODE_NAMES, state, renderCache, parseListingNames, RETRY_BASE_MS, RETRY_MAX_MS, BARLINE_MIN_STEP_MS, BARLINE_MAX_COUNT, BARLINE_HARD_MAX_COUNT } from "./shared.js?v=0.8.1";
 
 export function parseTiming(lines) {
   const raw = [];
@@ -60,6 +60,35 @@ export function computeMostCommonBeatLength(raw, lastTime) {
     }
   });
   return best;
+}
+
+// Bar lines (measure lines) for the falling preview: one line at every
+// measure boundary, derived from the red (uninherited) timing points and their
+// meter. Timing-only maps have thousands of them and no hit objects, so this is
+// the only thing such a map renders. The list is capped so a pathological map
+// (beatLength in the microseconds) can never hang the renderer.
+export function buildBarlines(timing, endTime) {
+  const bars = [];
+  const red = (timing && timing.raw ? timing.raw : []).filter((p) => p.uninherited && p.beatLength > 0);
+  if (!red.length) return bars;
+  const last = Math.max(Number(endTime) || 0, red[red.length - 1].time);
+  for (let i = 0; i < red.length; i += 1) {
+    const cur = red[i];
+    const next = i + 1 < red.length ? red[i + 1].time : Math.max(last, cur.time + 1);
+    // one line per red line is always kept (hard cap only against absurd files)
+    if (bars.length < BARLINE_HARD_MAX_COUNT) bars.push(cur.time);
+    const meter = cur.meter > 0 ? cur.meter : 4;
+    const step = cur.beatLength * meter;
+    if (!(step >= BARLINE_MIN_STEP_MS)) continue;
+    for (let k = 1; k < 512; k += 1) {
+      const t = cur.time + step * k;
+      if (t >= next) break;
+      bars.push(t);
+      if (bars.length >= BARLINE_MAX_COUNT) break;
+    }
+  }
+  bars.sort((a, b) => a - b);
+  return bars;
 }
 
 export function parseHitObject(line) {
@@ -122,6 +151,7 @@ export function parseOsu(text) {
   objects.sort((a, b) => a.time - b.time);
   const lastTime = objects.length ? objects[objects.length - 1].time : 0;
   timing.mostCommon = computeMostCommonBeatLength(timing.raw, lastTime);
+  timing.bars = buildBarlines(timing, lastTime);
   return { general, difficulty, timing, objects };
 }
 
@@ -146,6 +176,7 @@ export function buildManiaNative(parsed, keys) {
     mode: "mania",
     keys,
     notes,
+    bars: parsed.timing.bars || [],
     cps: maniaCps(parsed.timing, true),
     notice: ""
   };
@@ -179,6 +210,7 @@ export function buildManiaFromStandard(parsed, keys) {
     mode: "mania",
     keys,
     notes,
+    bars: parsed.timing.bars || [],
     cps: maniaCps(parsed.timing, false),
     notice: "converted from osu!standard (approximate)"
   };
@@ -197,6 +229,7 @@ export function buildBeatmapFor(parsed) {
     mode: "mania",
     keys,
     notes: [],
+    bars: parsed.timing.bars || [],
     cps: [],
     notice: `${mapMode} charts are not supported (mania only)`
   };

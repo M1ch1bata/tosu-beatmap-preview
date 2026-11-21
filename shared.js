@@ -86,6 +86,13 @@ export const OSK_FALLBACK_FILES = ["player.osk", "skin.osk"];
 export const PREVIEW_STATES = new Set(["selectPlay", "selectEdit", "selectMulti", "matchSetup"]);
 export const RETRY_BASE_MS = 2000;
 export const RETRY_MAX_MS = 30000;
+// bar lines (measure lines) taken from the map timing; they are what makes a
+// timing-only "gimmick" map visible in the preview at all
+export const BARLINE_MIN_STEP_MS = 1;
+export const BARLINE_MAX_COUNT = 20000; // periodic (in-between) bars
+export const BARLINE_HARD_MAX_COUNT = 80000; // including one bar per red line
+export const BARLINE_MIN_SPACING_PX = 1.5;
+export const BARLINE_ALPHA = 0.4;
 
 export const settings = {
   backgroundColor: "#000000",
@@ -97,7 +104,9 @@ export const settings = {
   lazerSkinFile: "",
   maniaScrollSpeedOverride: 0,
   playfieldOpacity: 1,
-  fpsLimit: 0
+  fpsLimit: 0,
+  showBarlines: true,
+  flipPlayfield: false
 };
 
 export const state = {
@@ -177,6 +186,8 @@ export const renderKey = {
   renderScale: 100,
   backgroundOpacity: 0,
   backgroundColor: "#000000",
+  showBarlines: true,
+  flipPlayfield: false,
   width: 0,
   height: 0
 };
@@ -193,6 +204,8 @@ export function buildRenderKey(out, t, width, height) {
   out.renderScale = settings.renderScale;
   out.backgroundOpacity = settings.backgroundOpacity;
   out.backgroundColor = settings.backgroundColor;
+  out.showBarlines = settings.showBarlines;
+  out.flipPlayfield = settings.flipPlayfield;
   out.width = width;
   out.height = height;
   return out;
@@ -210,6 +223,8 @@ export function renderKeyDiffers(a, b) {
     a.renderScale !== b.renderScale ||
     a.backgroundOpacity !== b.backgroundOpacity ||
     a.backgroundColor !== b.backgroundColor ||
+    a.showBarlines !== b.showBarlines ||
+    a.flipPlayfield !== b.flipPlayfield ||
     a.width !== b.width ||
     a.height !== b.height
   );
@@ -286,7 +301,7 @@ export function parseSkinIni(text) {
 }
 
 export function skinContentRev() {
-  return `${state.loadedSkinFolder || ""}|${state.skinRev}|${settings.useSkin ? "1" : "0"}|${state.client}|${state.oskFile}`;
+  return `${state.loadedSkinFolder || ""}|${state.skinRev}|${settings.useSkin ? "1" : "0"}|${state.client}|${state.oskFile}|${settings.flipPlayfield ? "1" : "0"}`;
 }
 
 export function applySkinConfig(config, filePresent) {

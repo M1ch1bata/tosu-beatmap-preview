@@ -1,5 +1,5 @@
 // osk.js - in-browser .osk (zip) reading for osu!lazer skins.
-import { OSK_MAX_ENTRY_BYTES, OSK_FALLBACK_FILES, state, settings, imageState, splitSkinPath, isSafeAssetName, encodeSkinPath, tryImageUrl, parseSkinIni, applySkinConfig } from "./shared.js";
+import { OSK_MAX_ENTRY_BYTES, OSK_FALLBACK_FILES, state, settings, imageState, splitSkinPath, isSafeAssetName, encodeSkinPath, tryImageUrl, parseSkinIni, applySkinConfig } from "./shared.js?v=0.8.1";
 
 export function decodeZipName(bytes, flags) {
   if (flags & 0x0800) return new TextDecoder("utf-8").decode(bytes);
